@@ -152,8 +152,8 @@ function moveBalls(seconds) {
 
 function sunsetSky(THREE, radius) {
   const geometry = new THREE.SphereGeometry(radius, 32, 16)
-  const stops = ['#ffc49a', '#ff9a8b', '#d77aa6', '#7b5aa6', '#2c2260'].map(hex => new THREE.Color(hex))
-  const desertColor = new THREE.Color('#9c5f5a')
+  const stops = ['#f6e4ee', '#e6b8d8', '#ab9de2', '#5f6fc4', '#1c2350'].map(hex => new THREE.Color(hex))
+  const desertColor = new THREE.Color('#6a5a8c')
   const colors = []
   for (let i = 0; i < geometry.attributes.position.count; i++) {
     const verticalPosition = geometry.attributes.position.getY(i) / radius
@@ -212,10 +212,10 @@ async function startRip() {
   camera.position.set(width / 2, height / 2, cameraDistance)
   camera.lookAt(width / 2, height / 2, 0)
   const scene = new THREE.Scene()
-  scene.fog = new THREE.Fog('#ffc49a', cameraDistance + 800, cameraDistance + 7000)
+  scene.fog = new THREE.Fog('#eedcec', cameraDistance + 800, cameraDistance + 7000)
   const sky = sunsetSky(THREE, 8000)
   sky.position.copy(camera.position)
-  const keyLight = new THREE.DirectionalLight('#ffe6cc', 2.45)
+  const keyLight = new THREE.DirectionalLight('#fff6f2', 2.45)
   keyLight.position.set(width * 0.1, height * 1.2, cameraDistance)
   keyLight.target.position.set(width / 2, height / 2, 0)
   keyLight.castShadow = true
@@ -230,19 +230,19 @@ async function startRip() {
     dunes.attributes.position.setY(i, Math.sin(x * 0.0012) * Math.cos(z * 0.0009) * 120 + Math.sin(x * 0.0031 + z * 0.002) * 40)
   }
   dunes.computeVertexNormals()
-  const desert = new THREE.Mesh(dunes, new THREE.MeshLambertMaterial({ color: '#d9967a' }))
+  const desert = new THREE.Mesh(dunes, new THREE.MeshLambertMaterial({ color: '#7d6a9a' }))
   desert.position.set(width / 2, -height * 0.6, 0)
   scene.add(sky, keyLight, keyLight.target, new THREE.AmbientLight('#ffffff', 1.2), desert)
 
   const puffTexture = softPuffTexture(THREE)
-  const sun = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffTexture, color: '#fff1c1', fog: false, depthWrite: false }))
+  const sun = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffTexture, color: '#fff8e8', fog: false, depthWrite: false }))
   sun.position.set(width / 2 + 1500, height * 0.2, -7000)
   sun.scale.setScalar(2500)
   scene.add(sun)
   const cloudPuffs = []
   for (let cloud = 0; cloud < 25; cloud++) {
     const cloudX = width / 2 + (Math.random() - 0.5) * 14000, cloudY = height * (0.5 + Math.random() * 2.5), cloudZ = -1500 - Math.random() * 5500
-    const tint = ['#ffffff', '#ffd6e0', '#ffc9a8'][cloud % 3]
+    const tint = ['#ffffff', '#f1e2f7', '#e2e6ff'][cloud % 3]
     for (let puff = 0; puff < 6; puff++) {
       const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffTexture, color: tint, transparent: true, opacity: 0.55, depthWrite: false }))
       sprite.position.set(cloudX + (Math.random() - 0.5) * 900, cloudY + (Math.random() - 0.5) * 200, cloudZ + (Math.random() - 0.5) * 300)
@@ -282,7 +282,7 @@ async function startRip() {
     motePositions.set([width / 2 + (Math.random() - 0.5) * 4000, (Math.random() * 2.3 - 0.3) * height, -300 - Math.random() * 3000], mote * 3)
   }
   const moteGeometry = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(motePositions, 3))
-  const moteMaterial = new THREE.PointsMaterial({ map: puffTexture, color: '#fff2d9', size: 40, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false })
+  const moteMaterial = new THREE.PointsMaterial({ map: puffTexture, color: '#fdf6ff', size: 40, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false })
   scene.add(new THREE.Points(moteGeometry, moteMaterial))
 
   rows = Math.round(columns * height / width)
