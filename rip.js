@@ -4,14 +4,20 @@ const setting = (name, fallback) => Number(urlSettings.get(name) ?? fallback)
 const columns = setting('columns', isTouchDevice ? 80 : 160)
 const relaxIterations = setting('iterations', 4), burstAfterSeconds = setting('burst', 5)
 const roseCount = setting('roses', isTouchDevice ? 60 : 120), windStrength = setting('wind', 0.15)
-const roseHexes = ['#ff4fb0', '#c86bff', '#7a6cff', '#4fa3ff', '#e9f3ff', '#c86bff', '#4fa3ff', '#ff2d6a', '#ffd34f', '#ff8f3f']
-const petalsPerRose = 13, leavesPerRose = 3, goldenAngle = 2.39996
+const seasonHexes = [
+  ['#ffc4d6', '#ff9ebb', '#ffffff', '#ffe3ec', '#ffb3c8', '#ffffff', '#ffe14d'],
+  ['#4b4bd8', '#7a5cff', '#8fb4ff', '#f4f6ff', '#5b8cff'],
+  ['#e8102e', '#ff5a1f', '#ffc21a', '#b0002a', '#ff8a3d'],
+  ['#d7003a', '#ffffff', '#ffd1dc', '#c2002f', '#ffffff']
+]
+const petalsPerRose = 13, leavesPerRose = 3, goldenAngle = 2.39996, secondsPerSeason = 40
 const gravity = 0.04, damping = 0.98, knifeRadius = 22, slashRadius = 30, maskScale = 0.5, scatterRadius = 120
 const pointer = { x: 0, y: 0, isDown: false }
 const tilt = { x: 0, y: 0 }
 let linkStart, linkEnd, linkRestLength, linkCount = 0
 let dragStart = null, lastCut = null, ripStarted = false, askedForGyro = false
 let viewWidth, viewHeight, rowSpacing, rows, positions, previousPositions, isPinned, isPunctured
+let seasonColors, currentSeason = 0
 let holeMask, holeTexture, pagePointAt, pageLinks = [], scrolledRows = 0, scrollRemainder = 0
 
 function updatePointer(event) {
@@ -136,7 +142,12 @@ function plantRose(rose, screenY) {
   rose.tiltZ = (Math.random() - 0.5) * 1.2
   rose.spin = Math.random() * Math.PI * 2
   rose.scatter = 0
-  rose.colorIndex = Math.floor(Math.random() * roseHexes.length)
+  rose.color = randomSeasonColor()
+}
+
+function randomSeasonColor() {
+  const palette = seasonColors[currentSeason]
+  return palette[Math.floor(Math.random() * palette.length)]
 }
 
 function riseRose(rose, secondsPassed) {
@@ -165,21 +176,31 @@ function cuppedPetal(THREE) {
   return petal
 }
 
-function nightSky(THREE, radius) {
-  const geometry = new THREE.SphereGeometry(radius, 32, 16)
-  const stops = ['#2a1838', '#1a1233', '#0e0c24', '#070716', '#030309'].map(hex => new THREE.Color(hex))
-  const desertColor = new THREE.Color('#050409')
-  const colors = []
-  for (let i = 0; i < geometry.attributes.position.count; i++) {
-    const verticalPosition = geometry.attributes.position.getY(i) / radius
-    const height = Math.max(verticalPosition, 0) ** 0.6 * (stops.length - 1)
-    const lower = Math.min(Math.floor(height), stops.length - 2)
-    const color = stops[lower].clone().lerp(stops[lower + 1], height - lower)
-    if (verticalPosition < 0) color.lerp(desertColor, Math.min(-verticalPosition * 4, 1))
-    colors.push(color.r, color.g, color.b)
+// Indigo ground with faint squares of gold leaf, like the folding screens teamLab paints its flowers on
+function goldLeafTexture(THREE) {
+  const canvas = document.createElement('canvas')
+  canvas.width = canvas.height = 1024
+  const context = canvas.getContext('2d')
+  context.fillStyle = '#04071a'
+  context.fillRect(0, 0, 1024, 1024)
+  for (let mist = 0; mist < 6; mist++) {
+    const x = Math.random() * 1024, y = Math.random() * 1024
+    const indigoMist = context.createRadialGradient(x, y, 0, x, y, 300)
+    indigoMist.addColorStop(0, 'rgba(30, 50, 120, 0.5)')
+    indigoMist.addColorStop(1, 'rgba(30, 50, 120, 0)')
+    context.fillStyle = indigoMist
+    context.fillRect(0, 0, 1024, 1024)
   }
-  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
-  return new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false }))
+  for (let x = 0; x < 1024; x += 64) {
+    for (let y = 0; y < 1024; y += 64) {
+      context.fillStyle = `rgba(201, 162, 74, ${Math.random() * 0.05})`
+      context.fillRect(x + 1, y + 1, 62, 62)
+    }
+  }
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.colorSpace = THREE.SRGBColorSpace
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping
+  return texture
 }
 
 function softPuffTexture(THREE) {
@@ -225,9 +246,11 @@ async function startRip() {
   camera.position.set(width / 2, height / 2, cameraDistance)
   camera.lookAt(width / 2, height / 2, 0)
   const scene = new THREE.Scene()
-  scene.fog = new THREE.Fog('#1a1030', cameraDistance + 800, cameraDistance + 7000)
-  const sky = nightSky(THREE, 8000)
-  sky.position.copy(camera.position)
+  const screenDepth = -1400, screenHeight = 2 * (cameraDistance - screenDepth) * Math.tan(THREE.MathUtils.degToRad(fieldOfView / 2)) * 1.4
+  const goldLeaf = goldLeafTexture(THREE)
+  goldLeaf.repeat.set(screenHeight * width / height / 1440, screenHeight / 1440)
+  const foldingScreen = new THREE.Mesh(new THREE.PlaneGeometry(screenHeight * width / height, screenHeight), new THREE.MeshBasicMaterial({ map: goldLeaf }))
+  foldingScreen.position.set(width / 2, height / 2, screenDepth)
   const keyLight = new THREE.DirectionalLight('#fff6f2', 2.45)
   keyLight.position.set(width * 0.1, height * 1.2, cameraDistance)
   keyLight.target.position.set(width / 2, height / 2, 0)
@@ -237,29 +260,9 @@ async function startRip() {
   keyLight.shadow.bias = -0.0005
   keyLight.shadow.normalBias = 1.5
 
-  const dunes = new THREE.PlaneGeometry(20000, 20000, 120, 120).rotateX(-Math.PI / 2)
-  for (let i = 0; i < dunes.attributes.position.count; i++) {
-    const x = dunes.attributes.position.getX(i), z = dunes.attributes.position.getZ(i)
-    dunes.attributes.position.setY(i, Math.sin(x * 0.0012) * Math.cos(z * 0.0009) * 120 + Math.sin(x * 0.0031 + z * 0.002) * 40)
-  }
-  dunes.computeVertexNormals()
-  const desert = new THREE.Mesh(dunes, new THREE.MeshLambertMaterial({ color: '#0b0914' }))
-  desert.position.set(width / 2, -height * 0.6, 0)
-  scene.add(sky, keyLight, keyLight.target, new THREE.AmbientLight('#ffffff', 1.2), desert)
-
+  scene.add(foldingScreen, keyLight, keyLight.target, new THREE.AmbientLight('#ffffff', 1.2))
   const puffTexture = softPuffTexture(THREE)
-  const cloudPuffs = []
-  for (let cloud = 0; cloud < 25; cloud++) {
-    const cloudX = width / 2 + (Math.random() - 0.5) * 14000, cloudY = height * (0.5 + Math.random() * 2.5), cloudZ = -1500 - Math.random() * 5500
-    const tint = ['#3b2350', '#22305c', '#4a2a4a'][cloud % 3]
-    for (let puff = 0; puff < 6; puff++) {
-      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffTexture, color: tint, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }))
-      sprite.position.set(cloudX + (Math.random() - 0.5) * 900, cloudY + (Math.random() - 0.5) * 200, cloudZ + (Math.random() - 0.5) * 300)
-      sprite.scale.setScalar(500 + Math.random() * 700)
-      cloudPuffs.push(sprite)
-      scene.add(sprite)
-    }
-  }
+  seasonColors = seasonHexes.map(palette => palette.map(hex => new THREE.Color(hex)))
 
   const texture = new THREE.CanvasTexture(snapshot)
   texture.colorSpace = THREE.SRGBColorSpace
@@ -273,15 +276,15 @@ async function startRip() {
   holeTexture = new THREE.CanvasTexture(maskCanvas)
   for (const pageTexture of [texture, holeTexture]) pageTexture.repeat.y = height / pageHeight
 
-  const moteCount = 500
+  const moteCount = 700
   const motePositions = new Float32Array(moteCount * 3), moteColors = new Float32Array(moteCount * 3)
   for (let mote = 0; mote < moteCount; mote++) {
-    motePositions.set([width / 2 + (Math.random() - 0.5) * 4000, (Math.random() * 2.3 - 0.3) * height, -300 - Math.random() * 3000], mote * 3)
-    new THREE.Color().setHSL(0.7 + Math.random() * 0.25, 0.8, 0.7).toArray(moteColors, mote * 3)
+    motePositions.set([width / 2 + (Math.random() - 0.5) * 3000, (Math.random() * 2.3 - 0.3) * height, -200 - Math.random() * 1100], mote * 3)
+    randomSeasonColor().toArray(moteColors, mote * 3)
   }
   const moteGeometry = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(motePositions, 3))
   moteGeometry.setAttribute('color', new THREE.BufferAttribute(moteColors, 3))
-  const moteMaterial = new THREE.PointsMaterial({ map: puffTexture, vertexColors: true, size: 30, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })
+  const moteMaterial = new THREE.PointsMaterial({ map: puffTexture, vertexColors: true, size: 20, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })
   scene.add(new THREE.Points(moteGeometry, moteMaterial))
 
   rows = Math.round(columns * height / width)
@@ -320,7 +323,6 @@ async function startRip() {
     if (row < rows - 2) linkParticles(i, i + columns * 2)
   }
 
-  const roseColors = roseHexes.map(hex => new THREE.Color(hex))
   const petalShape = cuppedPetal(THREE)
   const glowingPetal = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide })
   glowingPetal.onBeforeCompile = shader => {
@@ -362,13 +364,16 @@ async function startRip() {
     followScroll()
     clothMesh.position.y = scrollRemainder
     for (const pageTexture of [texture, holeTexture]) pageTexture.offset.y = 1 - (scrolledRows * rowSpacing + height) / pageHeight
-    for (const puff of cloudPuffs) puff.position.x = (puff.position.x + 7000 + 0.15) % 14000 - 7000
+    currentSeason = Math.floor((seconds - ripStartSeconds) / secondsPerSeason) % seasonHexes.length
     for (let mote = 0; mote < moteCount; mote++) {
       motePositions[mote * 3] += Math.sin(seconds * 0.3 + mote) * 0.2
       motePositions[mote * 3 + 1] += 0.2 + (mote % 5) * 0.06
-      if (motePositions[mote * 3 + 1] > height * 2) motePositions[mote * 3 + 1] = -height * 0.3
+      if (motePositions[mote * 3 + 1] > height * 2) {
+        motePositions[mote * 3 + 1] = -height * 0.3
+        randomSeasonColor().toArray(moteColors, mote * 3)
+      }
     }
-    moteGeometry.attributes.position.needsUpdate = true
+    moteGeometry.attributes.position.needsUpdate = moteGeometry.attributes.color.needsUpdate = true
     const slashTarget = Math.min(Math.max(tearSeconds / 0.8, 0), 1)
     while (slashDone < slashTarget) {
       slashDone = Math.min(slashDone + 0.004, slashTarget)
@@ -388,13 +393,13 @@ async function startRip() {
         const outerness = petal / (petalsPerRose - 1)
         const petalIndex = roseIndex * petalsPerRose + petal
         placePart(petals, petalIndex, petal * goldenAngle + rose.spin, 0.15 + bloom * (0.15 + 1.25 * outerness), 0.9 * (0.45 + 0.6 * outerness), 0.45 + 0.6 * outerness, rose.scatter)
-        petals.setColorAt(petalIndex, roseColors[rose.colorIndex])
+        petals.setColorAt(petalIndex, rose.color)
       }
       for (let leaf = 0; leaf < leavesPerRose; leaf++) {
         placePart(leaves, roseIndex * leavesPerRose + leaf, leaf * 2.1 + rose.spin + 0.5, 1.75, 0.45, 0.6 + 0.8 * bloom, rose.scatter)
       }
       rosePlacement.position.toArray(glowPositions, roseIndex * 3)
-      roseColors[rose.colorIndex].toArray(glowColors, roseIndex * 3)
+      rose.color.toArray(glowColors, roseIndex * 3)
       for (let channel = 0; channel < 3; channel++) glowColors[roseIndex * 3 + channel] *= 0.4 * bloom * (1 - rose.scatter)
     })
     for (const instances of [petals.instanceMatrix, petals.instanceColor, leaves.instanceMatrix, glowGeometry.attributes.position, glowGeometry.attributes.color]) instances.needsUpdate = true
