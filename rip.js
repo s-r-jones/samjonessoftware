@@ -2,7 +2,7 @@ const isTouchDevice = matchMedia('(pointer: coarse)').matches
 const urlSettings = new URLSearchParams(location.search)
 const setting = (name, fallback) => Number(urlSettings.get(name) ?? fallback)
 const columns = setting('columns', isTouchDevice ? 80 : 160)
-const relaxIterations = setting('iterations', 4), burstAfterSeconds = setting('burst', 8)
+const relaxIterations = setting('iterations', 4), burstAfterSeconds = setting('burst', 5)
 const roseCount = setting('roses', isTouchDevice ? 60 : 120), windStrength = setting('wind', 0.15)
 const roseHexes = ['#ff4fb0', '#c86bff', '#7a6cff', '#4fa3ff', '#e9f3ff', '#c86bff', '#4fa3ff', '#ff2d6a', '#ffd34f', '#ff8f3f']
 const petalsPerRose = 13, leavesPerRose = 3, goldenAngle = 2.39996
