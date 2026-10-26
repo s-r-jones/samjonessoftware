@@ -3,21 +3,13 @@ const urlSettings = new URLSearchParams(location.search)
 const setting = (name, fallback) => Number(urlSettings.get(name) ?? fallback)
 const columns = setting('columns', isTouchDevice ? 80 : 160)
 const relaxIterations = setting('iterations', 4), burstAfterSeconds = setting('burst', 5)
-const roseCount = setting('roses', isTouchDevice ? 60 : 120), windStrength = setting('wind', 0.15)
-const seasonHexes = [
-  ['#ffc4d6', '#ff9ebb', '#ffffff', '#ffe3ec', '#ffb3c8', '#ffffff', '#ffe14d'],
-  ['#4b4bd8', '#7a5cff', '#8fb4ff', '#f4f6ff', '#5b8cff'],
-  ['#e8102e', '#ff5a1f', '#ffc21a', '#b0002a', '#ff8a3d'],
-  ['#d7003a', '#ffffff', '#ffd1dc', '#c2002f', '#ffffff']
-]
-const petalsPerRose = 13, leavesPerRose = 3, goldenAngle = 2.39996, secondsPerSeason = 40
-const gravity = 0.04, damping = 0.98, knifeRadius = 22, slashRadius = 30, maskScale = 0.5, scatterRadius = 120
+const flowerCount = setting('flowers', isTouchDevice ? 150 : 350), windStrength = setting('wind', 0.15)
+const gravity = 0.04, damping = 0.98, knifeRadius = 22, slashRadius = 30, maskScale = 0.5
 const pointer = { x: 0, y: 0, isDown: false }
 const tilt = { x: 0, y: 0 }
 let linkStart, linkEnd, linkRestLength, linkCount = 0
 let dragStart = null, lastCut = null, ripStarted = false, askedForGyro = false
 let viewWidth, viewHeight, rowSpacing, rows, positions, previousPositions, isPinned, isPunctured
-let seasonColors, currentSeason = 0
 let holeMask, holeTexture, pagePointAt, pageLinks = [], scrolledRows = 0, scrollRemainder = 0
 
 function updatePointer(event) {
@@ -131,51 +123,6 @@ function cutAlongDrag() {
   lastCut = { x: pointer.x, y: pointer.y }
 }
 
-function plantRose(rose, screenY) {
-  rose.stream = Math.floor(Math.random() * 3)
-  rose.streamOffset = (Math.random() - 0.5) * 0.16
-  rose.screenY = screenY
-  rose.z = -150 - Math.random() * 500
-  rose.size = 28 + Math.random() * 28
-  rose.riseSpeed = 25 + Math.random() * 30
-  rose.tiltX = (Math.random() - 0.5) * 1.2
-  rose.tiltZ = (Math.random() - 0.5) * 1.2
-  rose.spin = Math.random() * Math.PI * 2
-  rose.scatter = 0
-  rose.color = randomSeasonColor()
-}
-
-function randomSeasonColor() {
-  const palette = seasonColors[currentSeason]
-  return palette[Math.floor(Math.random() * palette.length)]
-}
-
-function riseRose(rose, secondsPassed) {
-  rose.screenY += rose.riseSpeed * secondsPassed
-  rose.spin += secondsPassed * 0.2
-  const streamCenter = [0.18, 0.5, 0.82][rose.stream] + rose.streamOffset + Math.sin(rose.screenY * 0.004 + rose.stream * 2) * 0.06
-  rose.screenX = streamCenter * viewWidth + tilt.x
-  const isTouched = pointer.isDown && Math.hypot(pointer.x - rose.screenX, pointer.y - rose.screenY) < scatterRadius
-  if (rose.scatter > 0 || isTouched || rose.screenY > viewHeight * 0.92) rose.scatter += secondsPassed / 1.5
-  if (rose.scatter >= 1) plantRose(rose, -60)
-  const bloom = Math.min(Math.max(rose.screenY / (viewHeight * 0.6), 0), 1)
-  return bloom * bloom * (3 - 2 * bloom)
-}
-
-function cuppedPetal(THREE) {
-  const petal = new THREE.PlaneGeometry(1, 1, 4, 6).translate(0, 0.5, 0)
-  const brightness = []
-  for (let i = 0; i < petal.attributes.position.count; i++) {
-    const x = petal.attributes.position.getX(i), y = petal.attributes.position.getY(i)
-    const width = 0.1 + 0.9 * Math.sin(Math.PI * Math.min(y * 1.1, 1))
-    petal.attributes.position.setXYZ(i, x * width, y, -x * x * 0.8 - y * y * 0.3)
-    brightness.push(1 - 0.4 * y, 1 - 0.4 * y, 1 - 0.4 * y)
-  }
-  petal.setAttribute('color', new THREE.Float32BufferAttribute(brightness, 3))
-  petal.computeVertexNormals()
-  return petal
-}
-
 // Indigo ground with faint squares of gold leaf, like the folding screens teamLab paints its flowers on
 function goldLeafTexture(THREE) {
   const canvas = document.createElement('canvas')
@@ -203,21 +150,9 @@ function goldLeafTexture(THREE) {
   return texture
 }
 
-function softPuffTexture(THREE) {
-  const canvas = document.createElement('canvas')
-  canvas.width = canvas.height = 128
-  const context = canvas.getContext('2d')
-  const gradient = context.createRadialGradient(64, 64, 0, 64, 64, 64)
-  gradient.addColorStop(0, 'rgba(255,255,255,1)')
-  gradient.addColorStop(1, 'rgba(255,255,255,0)')
-  context.fillStyle = gradient
-  context.fillRect(0, 0, 128, 128)
-  return new THREE.CanvasTexture(canvas)
-}
-
 async function startRip() {
   ripStarted = true
-  const [THREE, { default: html2canvas }] = await Promise.all([import('three'), import('html2canvas')])
+  const [THREE, { default: html2canvas }, { createFlowerField }] = await Promise.all([import('three'), import('html2canvas'), import('./flowers.js')])
   // Safari never loads lazy images inside html2canvas's offscreen clone, so the snapshot hangs forever
   document.querySelectorAll('img').forEach(image => image.loading = 'eager')
   document.querySelectorAll('video').forEach(video => video.outerHTML = `<img src="${video.poster}" width="${video.width}">`)
@@ -261,8 +196,6 @@ async function startRip() {
   keyLight.shadow.normalBias = 1.5
 
   scene.add(foldingScreen, keyLight, keyLight.target, new THREE.AmbientLight('#ffffff', 1.2))
-  const puffTexture = softPuffTexture(THREE)
-  seasonColors = seasonHexes.map(palette => palette.map(hex => new THREE.Color(hex)))
 
   const texture = new THREE.CanvasTexture(snapshot)
   texture.colorSpace = THREE.SRGBColorSpace
@@ -276,17 +209,8 @@ async function startRip() {
   holeTexture = new THREE.CanvasTexture(maskCanvas)
   for (const pageTexture of [texture, holeTexture]) pageTexture.repeat.y = height / pageHeight
 
-  const moteCount = 700
-  const motePositions = new Float32Array(moteCount * 3), moteColors = new Float32Array(moteCount * 3)
-  for (let mote = 0; mote < moteCount; mote++) {
-    motePositions.set([width / 2 + (Math.random() - 0.5) * 3000, (Math.random() * 2.3 - 0.3) * height, -200 - Math.random() * 1100], mote * 3)
-    randomSeasonColor().toArray(moteColors, mote * 3)
-  }
-  const moteGeometry = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(motePositions, 3))
-  moteGeometry.setAttribute('color', new THREE.BufferAttribute(moteColors, 3))
-  const moteMaterial = new THREE.PointsMaterial({ map: puffTexture, vertexColors: true, size: 20, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })
-  scene.add(new THREE.Points(moteGeometry, moteMaterial))
-
+  const flowers = createFlowerField(THREE, { flowerCount, moteCount: flowerCount * 2, width, height, cameraDistance, pixelRatio: renderer.getPixelRatio() })
+  scene.add(flowers.field)
   rows = Math.round(columns * height / width)
   rowSpacing = height / (rows - 1)
   const geometry = new THREE.PlaneGeometry(width, height, columns - 1, rows - 1).translate(width / 2, height / 2, 0)
@@ -323,57 +247,22 @@ async function startRip() {
     if (row < rows - 2) linkParticles(i, i + columns * 2)
   }
 
-  const petalShape = cuppedPetal(THREE)
-  const glowingPetal = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide })
-  glowingPetal.onBeforeCompile = shader => {
-    shader.fragmentShader = shader.fragmentShader.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * 0.6;')
-  }
-  const petals = new THREE.InstancedMesh(petalShape, glowingPetal, roseCount * petalsPerRose)
-  const leaves = new THREE.InstancedMesh(petalShape, new THREE.MeshLambertMaterial({ color: '#2f7a45', vertexColors: true, side: THREE.DoubleSide }), roseCount * leavesPerRose)
-  const glowPositions = new Float32Array(roseCount * 3), glowColors = new Float32Array(roseCount * 3)
-  const glowGeometry = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(glowPositions, 3))
-  glowGeometry.setAttribute('color', new THREE.BufferAttribute(glowColors, 3))
-  const glows = new THREE.Points(glowGeometry, new THREE.PointsMaterial({ map: puffTexture, vertexColors: true, size: 200, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }))
-  for (const roseMesh of [petals, leaves, glows]) roseMesh.frustumCulled = false
-  scene.add(petals, leaves, glows)
-  const roses = Array.from({ length: roseCount }, () => {
-    const rose = {}
-    plantRose(rose, Math.random() * height)
-    return rose
-  })
-  const rosePlacement = new THREE.Object3D(), partPlacement = new THREE.Object3D(), partMatrix = new THREE.Matrix4()
-  const placePart = (mesh, index, azimuth, openAngle, width, length, scatter) => {
-    partPlacement.rotation.set(openAngle, azimuth, scatter * 3, 'YXZ')
-    partPlacement.position.set(Math.sin(azimuth), 0, Math.cos(azimuth)).multiplyScalar(0.05 + scatter * 2)
-    partPlacement.scale.set(width, length, width).multiplyScalar(1 - scatter)
-    partPlacement.updateMatrix()
-    mesh.setMatrixAt(index, partMatrix.multiplyMatrices(rosePlacement.matrix, partPlacement.matrix))
-  }
   const slashFrom = { x: width * 0.03, y: height * 0.72 }, slashTo = { x: width * 0.97, y: height * 0.3 }
   let slashDone = 0
 
-  let ripStartSeconds = null, previousSeconds = null
+  let ripStartSeconds = null
   renderer.setAnimationLoop(time => {
     const seconds = time / 1000, tearSeconds = seconds - burstAfterSeconds - 3
     ripStartSeconds ??= seconds
-    const secondsPassed = Math.min(seconds - (previousSeconds ?? seconds), 0.1)
-    previousSeconds = seconds
     const lightShare = 0.5 * Math.min((seconds - ripStartSeconds) / 4, 1)
     clothMaterial.color.setScalar(lightShare)
     clothMaterial.emissiveIntensity = 1 - lightShare
     followScroll()
     clothMesh.position.y = scrollRemainder
     for (const pageTexture of [texture, holeTexture]) pageTexture.offset.y = 1 - (scrolledRows * rowSpacing + height) / pageHeight
-    currentSeason = Math.floor((seconds - ripStartSeconds) / secondsPerSeason) % seasonHexes.length
-    for (let mote = 0; mote < moteCount; mote++) {
-      motePositions[mote * 3] += Math.sin(seconds * 0.3 + mote) * 0.2
-      motePositions[mote * 3 + 1] += 0.2 + (mote % 5) * 0.06
-      if (motePositions[mote * 3 + 1] > height * 2) {
-        motePositions[mote * 3 + 1] = -height * 0.3
-        randomSeasonColor().toArray(moteColors, mote * 3)
-      }
-    }
-    moteGeometry.attributes.position.needsUpdate = moteGeometry.attributes.color.needsUpdate = true
+    // Starting the clock at the longest flower lifetime means every flower already on screen was born in spring
+    flowers.uniforms.time.value = seconds - ripStartSeconds + 24
+    flowers.field.position.set(tilt.x, tilt.y, 0)
     const slashTarget = Math.min(Math.max(tearSeconds / 0.8, 0), 1)
     while (slashDone < slashTarget) {
       slashDone = Math.min(slashDone + 0.004, slashTarget)
@@ -381,28 +270,6 @@ async function startRip() {
       const slashY = slashFrom.y + (slashTo.y - slashFrom.y) * slashDone + Math.sin(slashDone * Math.PI) * height * 0.08
       cutCloth(slashX, slashY, slashRadius, slashDone * 100)
     }
-
-    roses.forEach((rose, roseIndex) => {
-      const bloom = riseRose(rose, secondsPassed)
-      const perspective = cameraDistance / (cameraDistance - rose.z)
-      rosePlacement.position.set(width / 2 + (rose.screenX - width / 2) / perspective, height / 2 + (rose.screenY - height / 2) / perspective, rose.z)
-      rosePlacement.rotation.set(Math.PI / 2 + rose.tiltX, 0, rose.tiltZ)
-      rosePlacement.scale.setScalar(rose.size * (0.4 + 0.6 * bloom))
-      rosePlacement.updateMatrix()
-      for (let petal = 0; petal < petalsPerRose; petal++) {
-        const outerness = petal / (petalsPerRose - 1)
-        const petalIndex = roseIndex * petalsPerRose + petal
-        placePart(petals, petalIndex, petal * goldenAngle + rose.spin, 0.15 + bloom * (0.15 + 1.25 * outerness), 0.9 * (0.45 + 0.6 * outerness), 0.45 + 0.6 * outerness, rose.scatter)
-        petals.setColorAt(petalIndex, rose.color)
-      }
-      for (let leaf = 0; leaf < leavesPerRose; leaf++) {
-        placePart(leaves, roseIndex * leavesPerRose + leaf, leaf * 2.1 + rose.spin + 0.5, 1.75, 0.45, 0.6 + 0.8 * bloom, rose.scatter)
-      }
-      rosePlacement.position.toArray(glowPositions, roseIndex * 3)
-      rose.color.toArray(glowColors, roseIndex * 3)
-      for (let channel = 0; channel < 3; channel++) glowColors[roseIndex * 3 + channel] *= 0.4 * bloom * (1 - rose.scatter)
-    })
-    for (const instances of [petals.instanceMatrix, petals.instanceColor, leaves.instanceMatrix, glowGeometry.attributes.position, glowGeometry.attributes.color]) instances.needsUpdate = true
 
     simulateCloth(seconds)
     geometry.attributes.position.needsUpdate = true
