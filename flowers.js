@@ -1,6 +1,6 @@
 // Flowers are painted petal by petal in the fragment shader, like the hand-drawn flowers in teamLab's "Flowers and People".
 // Four kinds: blossoms with stamens, gerberas with a dark eye, layered dahlias, and roses with a swirled heart.
-// They rise in colonies of related colors, bud, bloom, wither, and scatter loose petals that tumble away.
+// They rise in colonies of related colors, bud, bloom, and scatter loose petals that tumble away.
 const seasonHexes = [
   ['#ffb3cc', '#ff6f9f', '#fff2f6', '#ffe04a', '#ff8fc0'],
   ['#4f63ff', '#9b5cff', '#c6d4ff', '#ffffff', '#ffcf33'],
@@ -15,9 +15,9 @@ uniform vec2 viewSize;
 uniform vec3 seasonColors[20];
 attribute vec4 colony, flower;
 attribute vec2 part;
-varying vec2 local;
-varying vec3 petalColor;
-varying float species, look, open, wither, shed, blur, fade, isLoosePetal;
+varying vec2 local, parallax;
+varying vec3 petalColor, lightInFlower;
+varying float species, look, open, shed, blur, fade, isLoosePetal;
 
 float hash(float n) { return fract(sin(n) * 43758.5453); }
 vec3 turnX(vec3 p, float angle) { return vec3(p.x, p.y * cos(angle) - p.z * sin(angle), p.y * sin(angle) + p.z * cos(angle)); }
@@ -40,7 +40,6 @@ void main() {
   species = floor(hash(flower.w * 7.3) * 4.0);
   look = flower.w;
   open = smoothstep(0.04, 0.32, life);
-  wither = smoothstep(0.62, 0.86, life);
   shed = smoothstep(0.7, 0.92, life);
   blur = smoothstep(60.0, 400.0, abs(flower.z + 300.0)) * 0.3;
 
@@ -58,6 +57,15 @@ void main() {
     fade = 1.0 - smoothstep(0.93, 1.0, life);
     center = centerAt(rise);
     corner = turnZ(vec3(local * radius * (0.35 + 0.65 * smoothstep(0.0, 0.3, life)), 0.0), spin);
+    // The camera and the light, seen from the flower's own tilted frame, so raised layers can shift and cupped petals can catch light
+    vec3 across = turnY(turnX(turnZ(vec3(1.0, 0.0, 0.0), spin), tilt.x), tilt.y);
+    vec3 up = turnY(turnX(turnZ(vec3(0.0, 1.0, 0.0), spin), tilt.x), tilt.y);
+    vec3 facing = turnY(turnX(vec3(0.0, 0.0, 1.0), tilt.x), tilt.y);
+    vec3 toCamera = normalize(cameraPosition - center);
+    vec3 cameraInFlower = vec3(dot(toCamera, across), dot(toCamera, up), dot(toCamera, facing));
+    parallax = cameraInFlower.xy / max(cameraInFlower.z, 0.3);
+    vec3 light = normalize(vec3(-0.5, 0.7, 0.6));
+    lightInFlower = vec3(dot(light, across), dot(light, up), dot(light, facing));
   } else {
     float shedAt = mix(0.7, 0.92, part.y);
     float age = fract(life - shedAt) * lifetime;
@@ -70,14 +78,16 @@ void main() {
     local = position.xy * 1.4;
     float tumble = age * (2.0 + part.y * 3.0) + part.y * 6.0;
     corner = turnZ(vec3(position.x * max(abs(cos(tumble)), 0.25), position.y, 0.0) * radius * 0.45, direction + age * (part.y - 0.5) * 1.5);
+    parallax = vec2(0.0);
+    lightInFlower = vec3(0.0, 0.0, abs(cos(tumble)));
   }
   gl_Position = projectionMatrix * modelViewMatrix * vec4(center + turnY(turnX(corner, tilt.x), tilt.y), 1.0);
 }`
 
 const flowerFragmentShader = `
-varying vec2 local;
-varying vec3 petalColor;
-varying float species, look, open, wither, shed, blur, fade, isLoosePetal;
+varying vec2 local, parallax;
+varying vec3 petalColor, lightInFlower;
+varying float species, look, open, shed, blur, fade, isLoosePetal;
 
 float hash(float n) { return fract(sin(n) * 43758.5453); }
 vec2 turn(vec2 p, float angle) { return vec2(p.x * cos(angle) + p.y * sin(angle), -p.x * sin(angle) + p.y * cos(angle)); }
@@ -93,15 +103,16 @@ float petal(vec2 q, float reach, float width, float notch, float edge, out vec2 
 }
 
 // Dark at the base where inner petals shade it, faint veins, light at the tip, a painted darker edge
-vec3 shadePetal(vec3 color, vec2 along, float id) {
+vec3 shadePetal(vec3 color, vec2 along, float id, float lit) {
   float baseShadow = mix(0.5, 1.0, smoothstep(0.0, 0.6, along.x));
   float veins = 1.0 - 0.12 * (0.5 + 0.5 * cos(along.y * 10.0)) * smoothstep(0.1, 0.9, along.x);
-  vec3 shaded = color * baseShadow * veins * (0.85 + 0.3 * hash(id));
+  vec3 shaded = color * baseShadow * veins * (0.85 + 0.3 * hash(id)) * (0.65 + 0.55 * lit);
   return mix(shaded, vec3(1.0), smoothstep(0.5, 1.0, along.x) * 0.25) * (1.0 - smoothstep(0.75, 1.0, along.y) * 0.25);
 }
 
 // A ring of petals, each overlapping the next like a pinwheel. Shed petals drop out one by one.
-vec4 petalRing(vec2 p, float count, float angleOffset, float reach, float width, float notch, vec3 color, float edge, float layer) {
+// Petals curve up toward their tips by "cup", so each one catches the light differently as the flower tilts.
+vec4 petalRing(vec2 p, float count, float angleOffset, float reach, float width, float notch, float cup, vec3 color, float edge, float layer) {
   float sector = 6.28318 / count;
   float angle = mod(atan(p.y, p.x) - angleOffset, 6.28318);
   float nearest = floor(angle / sector + 0.5);
@@ -113,7 +124,8 @@ vec4 petalRing(vec2 p, float count, float angleOffset, float reach, float width,
     float offset = angle - index * sector;
     vec2 along;
     float cover = petal(length(p) * vec2(cos(offset), sin(offset)), reach * (0.9 + 0.2 * hash(id + 5.0)), width, notch, edge, along);
-    ring = mix(ring, vec4(shadePetal(color, along, id), 1.0), cover);
+    vec3 surface = normalize(vec3(-normalize(p + 0.0001) * cup * along.x, 1.0));
+    ring = mix(ring, vec4(shadePetal(color, along, id, max(dot(surface, lightInFlower), 0.0)), 1.0), cover);
   }
   return ring;
 }
@@ -129,16 +141,16 @@ void main() {
   if (isLoosePetal > 0.5) {
     float bend = (hash(look * 9.0) - 0.5) * 0.6;
     float cover = petal(vec2(local.x + 1.0, local.y + bend * local.x * local.x), 2.0, kind == 0 || kind == 3 ? 0.4 : 0.22, kind == 0 ? 0.2 : 0.0, edge, along);
-    paint = vec4(shadePetal(petalColor, along, look), 1.0) * cover;
+    paint = vec4(shadePetal(petalColor, along, look, lightInFlower.z), 1.0) * cover;
     glow = pow(smoothstep(1.35, 0.0, r), 2.0) * 0.35;
   } else {
-    vec3 color = mix(petalColor, petalColor * 0.3 + vec3(0.1, 0.06, 0.03), wither);
+    vec3 color = petalColor;
 
     if (kind != 0) {
       for (int leaf = 0; leaf < 2; leaf++) {
-        float cover = petal(turn(local, look * 20.0 + float(leaf) * 2.6), 1.7, 0.16, 0.0, edge, along);
+        float cover = petal(turn(local - parallax * 0.08, look * 20.0 + float(leaf) * 2.6), 1.7, 0.16, 0.0, edge, along);
         vec3 leafColor = mix(vec3(0.04, 0.15, 0.09) * (0.7 + 0.6 * along.x), vec3(0.12, 0.3, 0.16), smoothstep(0.12, 0.0, along.y) * 0.6);
-        paint = mix(paint, vec4(mix(leafColor, vec3(0.12, 0.08, 0.04), wither), 1.0), cover * 0.9);
+        paint = mix(paint, vec4(leafColor * (0.5 + 0.7 * lightInFlower.z), 1.0), cover * 0.9);
       }
     }
 
@@ -146,19 +158,21 @@ void main() {
     for (int layer = 0; layer < 3; layer++) {
       float i = float(layer);
       if (i >= layers) break;
-      float count = 5.0, width = 0.85, notch = 0.0, reach = 1.0 - i * 0.28;
+      float count = 5.0, width = 0.85, notch = 0.0, reach = 1.0 - i * 0.28, cup = 0.9 + i * 0.4, height = i * 0.18;
       vec3 layerColor = color * (1.0 - i * 0.12);
-      if (kind == 0) { count = look < 0.5 ? 5.0 : 8.0; width = look < 0.5 ? 0.55 : 0.36; notch = look < 0.5 ? 0.22 : 0.1; reach = 1.0; layerColor = color; }
-      if (kind == 1) { count = 16.0 + floor(look * 8.0); width = 0.15; notch = 0.05; reach = 1.0 - i * 0.2; layerColor = color * (1.0 - i * 0.15); }
-      if (kind == 2) { count = 13.0 - i * 2.0; width = 0.22; reach = 1.0 - i * 0.26; layerColor = mix(color, vec3(1.0), i * 0.18); }
+      if (kind == 0) { count = look < 0.5 ? 5.0 : 8.0; width = look < 0.5 ? 0.55 : 0.36; notch = look < 0.5 ? 0.22 : 0.1; reach = 1.0; cup = 0.5; layerColor = color; }
+      if (kind == 1) { count = 16.0 + floor(look * 8.0); width = 0.15; notch = 0.05; reach = 1.0 - i * 0.2; cup = 0.3; height = i * 0.05; layerColor = color * (1.0 - i * 0.15); }
+      if (kind == 2) { count = 13.0 - i * 2.0; width = 0.22; reach = 1.0 - i * 0.26; cup = 0.6 + i * 0.3; height = i * 0.14; layerColor = mix(color, vec3(1.0), i * 0.18); }
       float layerOpen = smoothstep(i * 0.12, 0.55 + i * 0.12, open);
-      reach *= mix(0.3, 1.0, layerOpen) * (1.0 - 0.35 * wither);
-      vec4 ring = petalRing(local, count, i * 3.14159 / count + look * 6.28 + (1.0 - layerOpen) * 1.2, reach, width * mix(0.6, 1.0, layerOpen), notch, layerColor, edge, i);
+      reach *= mix(0.3, 1.0, layerOpen);
+      vec4 ring = petalRing(local + parallax * height, count, i * 3.14159 / count + look * 6.28 + (1.0 - layerOpen) * 1.2, reach, width * mix(0.6, 1.0, layerOpen), notch, cup, layerColor, edge, i);
       paint = ring + paint * (1.0 - ring.a);
     }
 
-    float heart = r / (mix(0.5, 1.0, open) * (1.0 - 0.3 * wither));
-    float angle = atan(local.y, local.x);
+    vec2 heartPoint = local + parallax * (kind == 0 ? 0.2 : kind == 1 ? 0.08 : 0.45);
+    r = length(heartPoint);
+    float heart = r / mix(0.5, 1.0, open);
+    float angle = atan(heartPoint.y, heartPoint.x);
     if (kind == 0) {
       float filamentGap = abs(fract(angle / 6.28318 * 12.0) - 0.5) * 6.28318 / 12.0 * r;
       paint = mix(paint, vec4(1.0, 0.92, 0.95, 1.0), smoothstep(edge + 0.012, 0.0, filamentGap) * step(heart, 0.34) * 0.8);
@@ -174,7 +188,7 @@ void main() {
       float swirl = 0.5 + 0.5 * sin(angle * 2.0 + log(max(heart, 0.01)) * 7.0 + look * 20.0);
       paint = mix(paint, vec4(color * mix(0.6, 1.0, swirl), 1.0), smoothstep(0.3 + edge, 0.3 - edge, heart) * open);
     }
-    glow = pow(smoothstep(1.85, 0.3, r), 1.5) * (0.2 + 0.35 * open) * (1.0 - 0.8 * wither);
+    glow = pow(smoothstep(1.85, 0.3, length(local)), 1.5) * (0.2 + 0.35 * open) * (1.0 - 0.7 * shed);
   }
   // Glow is added light (alpha 0) and the painted flower covers what is behind it
   gl_FragColor = vec4(paint.rgb + petalColor * glow * (1.0 - paint.a), paint.a) * fade;

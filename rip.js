@@ -123,8 +123,8 @@ function cutAlongDrag() {
   lastCut = { x: pointer.x, y: pointer.y }
 }
 
-// Indigo ground with faint squares of gold leaf, like the folding screens teamLab paints its flowers on
-function goldLeafTexture(THREE) {
+// Deep indigo night with soft drifting mist behind the flowers
+function indigoMistTexture(THREE) {
   const canvas = document.createElement('canvas')
   canvas.width = canvas.height = 1024
   const context = canvas.getContext('2d')
@@ -138,15 +138,8 @@ function goldLeafTexture(THREE) {
     context.fillStyle = indigoMist
     context.fillRect(0, 0, 1024, 1024)
   }
-  for (let x = 0; x < 1024; x += 64) {
-    for (let y = 0; y < 1024; y += 64) {
-      context.fillStyle = `rgba(201, 162, 74, ${Math.random() * 0.05})`
-      context.fillRect(x + 1, y + 1, 62, 62)
-    }
-  }
   const texture = new THREE.CanvasTexture(canvas)
   texture.colorSpace = THREE.SRGBColorSpace
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping
   return texture
 }
 
@@ -182,9 +175,8 @@ async function startRip() {
   camera.lookAt(width / 2, height / 2, 0)
   const scene = new THREE.Scene()
   const screenDepth = -1400, screenHeight = 2 * (cameraDistance - screenDepth) * Math.tan(THREE.MathUtils.degToRad(fieldOfView / 2)) * 1.4
-  const goldLeaf = goldLeafTexture(THREE)
-  goldLeaf.repeat.set(screenHeight * width / height / 1440, screenHeight / 1440)
-  const foldingScreen = new THREE.Mesh(new THREE.PlaneGeometry(screenHeight * width / height, screenHeight), new THREE.MeshBasicMaterial({ map: goldLeaf }))
+  const indigoMist = indigoMistTexture(THREE)
+  const foldingScreen = new THREE.Mesh(new THREE.PlaneGeometry(screenHeight * width / height, screenHeight), new THREE.MeshBasicMaterial({ map: indigoMist }))
   foldingScreen.position.set(width / 2, height / 2, screenDepth)
   const keyLight = new THREE.DirectionalLight('#fff6f2', 2.45)
   keyLight.position.set(width * 0.1, height * 1.2, cameraDistance)
