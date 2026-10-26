@@ -1,17 +1,15 @@
 const isTouchDevice = matchMedia('(pointer: coarse)').matches
 const urlSettings = new URLSearchParams(location.search)
 const setting = (name, fallback) => Number(urlSettings.get(name) ?? fallback)
-const columns = setting('columns', isTouchDevice ? 90 : 180)
-const relaxIterations = setting('iterations', 4), tearRatio = setting('tear', 1.6), punctureDepth = setting('puncture', 0.5)
+const columns = setting('columns', isTouchDevice ? 80 : 160)
+const relaxIterations = setting('iterations', 4), punctureDepth = setting('puncture', 0.5)
 const burstAfterSeconds = setting('burst', 30), ballStrength = setting('ball', 0.6)
-const gravity = 0.04, damping = 0.98, ballSubtract = 30, ballIsolation = 80
-const grabRadius = 30, pullTowardViewer = 60
+const gravity = 0.04, damping = 0.98, ballSubtract = 30, ballIsolation = 80, knifeRadius = 18
 const pointer = { x: 0, y: 0, isDown: false }
 const tilt = { x: 0, y: 0 }
-const rightLinks = [], downLinks = [], diagonalLinks = []
-let linkStart, linkEnd, linkRestLength, linkIsBroken, linkCount = 0
-let dragStart = null, ripStarted = false, askedForGyro = false
-let rows, positions, previousPositions, isPinned, isPunctured, grabbedPatch = []
+let linkStart, linkEnd, linkRestLength, linkCount = 0
+let dragStart = null, lastCut = null, ripStarted = false, askedForGyro = false
+let pageWidth, pageHeight, rows, positions, previousPositions, isPinned, isPunctured, holeMask, holeTexture
 let leader = { x: innerWidth / 2, y: innerHeight / 2 }
 
 function updatePointer(event) {
@@ -19,22 +17,9 @@ function updatePointer(event) {
   pointer.y = innerHeight - event.clientY
 }
 
-function grabClothPatch() {
-  grabbedPatch = []
-  for (let i = 0; i < columns * rows; i++) {
-    if (isPinned[i]) continue
-    const offsetX = positions[i * 3] - pointer.x, offsetY = positions[i * 3 + 1] - pointer.y
-    if (offsetX * offsetX + offsetY * offsetY > grabRadius * grabRadius) continue
-    grabbedPatch.push({ index: i, offsetX, offsetY })
-    isPinned[i] = 1
-  }
-}
-
-function releaseParticle() {
+function releasePointer() {
   pointer.isDown = false
-  dragStart = null
-  for (const grabbed of grabbedPatch) isPinned[grabbed.index] = 0
-  grabbedPatch = []
+  dragStart = lastCut = null
   if (ripStarted && !askedForGyro && window.DeviceOrientationEvent?.requestPermission) {
     askedForGyro = true
     DeviceOrientationEvent.requestPermission()
@@ -45,12 +30,12 @@ function linkParticles(a, b) {
   linkStart[linkCount] = a
   linkEnd[linkCount] = b
   linkRestLength[linkCount] = Math.hypot(positions[b * 3] - positions[a * 3], positions[b * 3 + 1] - positions[a * 3 + 1])
-  return linkCount++
+  linkCount++
 }
 
 function simulateCloth() {
   for (let i = 0; i < columns * rows; i++) {
-    if (isPinned[i]) continue
+    if (isPinned[i] || isPunctured[i]) continue
     for (let axis = 0; axis < 3; axis++) {
       const index = i * 3 + axis
       const velocity = (positions[index] - previousPositions[index]) * damping
@@ -59,18 +44,13 @@ function simulateCloth() {
     }
     positions[i * 3 + 1] -= gravity
   }
-  for (const grabbed of grabbedPatch) {
-    positions.set([pointer.x + grabbed.offsetX, pointer.y + grabbed.offsetY, pullTowardViewer], grabbed.index * 3)
-  }
   for (let iteration = 0; iteration < relaxIterations; iteration++) {
     for (let link = 0; link < linkCount; link++) {
-      if (linkIsBroken[link]) continue
       const start = linkStart[link], end = linkEnd[link]
-      if (isPunctured[start] || isPunctured[end]) { linkIsBroken[link] = 1; continue }
+      if (isPunctured[start] || isPunctured[end]) continue
       const a = start * 3, b = end * 3
       const deltaX = positions[b] - positions[a], deltaY = positions[b + 1] - positions[a + 1], deltaZ = positions[b + 2] - positions[a + 2]
       const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ)
-      if (distance > linkRestLength[link] * tearRatio) { linkIsBroken[link] = 1; continue }
       const weightA = 1 - isPinned[start], weightB = 1 - isPinned[end]
       const correction = (distance - linkRestLength[link]) / distance / (weightA + weightB || 1)
       positions[a] += deltaX * correction * weightA
@@ -85,33 +65,38 @@ function simulateCloth() {
 
 function pushClothOutOfBall(ball, radius) {
   for (let i = 0; i < columns * rows; i++) {
-    if (isPinned[i]) continue
+    if (isPinned[i] || isPunctured[i]) continue
     const deltaX = positions[i * 3] - ball.x, deltaY = positions[i * 3 + 1] - ball.y, deltaZ = positions[i * 3 + 2] - ball.z
     const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ)
     if (distance === 0 || distance >= radius) continue
     const pushOut = radius / distance
     positions.set([ball.x + deltaX * pushOut, ball.y + deltaY * pushOut, ball.z + deltaZ * pushOut], i * 3)
-    if (positions[i * 3 + 2] > radius * punctureDepth) isPunctured[i] = 1
   }
 }
 
-function writeVisibleTriangles(triangleIndices) {
-  let count = 0
-  for (let row = 0; row < rows - 1; row++) {
-    for (let column = 0; column < columns - 1; column++) {
-      const topLeft = row * columns + column, bottomLeft = topLeft + columns, topRight = topLeft + 1
-      if (linkIsBroken[diagonalLinks[topLeft]]) continue
-      if (!linkIsBroken[downLinks[topLeft]] && !linkIsBroken[rightLinks[topLeft]]) {
-        triangleIndices.set([topLeft, bottomLeft, topRight], count)
-        count += 3
-      }
-      if (!linkIsBroken[rightLinks[bottomLeft]] && !linkIsBroken[downLinks[topRight]]) {
-        triangleIndices.set([bottomLeft, bottomLeft + 1, topRight], count)
-        count += 3
-      }
-    }
+function cutCloth(x, y, radius, seed) {
+  const maskScale = holeMask.canvas.width / pageWidth
+  holeMask.beginPath()
+  for (let angle = 0; angle < Math.PI * 2; angle += 0.2) {
+    const raggedRadius = radius * (1 + 0.12 * Math.sin(angle * 5 + seed) + 0.06 * Math.sin(angle * 13 + seed * 3))
+    holeMask.lineTo((x + Math.cos(angle) * raggedRadius) * maskScale, (pageHeight - y - Math.sin(angle) * raggedRadius) * maskScale)
   }
-  return count
+  holeMask.fill()
+  holeTexture.needsUpdate = true
+
+  const releaseRadius = radius - 1.5 * pageWidth / (columns - 1)
+  for (let i = 0; i < columns * rows; i++) {
+    const restX = (i % columns) * pageWidth / (columns - 1), restY = pageHeight - Math.floor(i / columns) * pageHeight / (rows - 1)
+    if ((restX - x) ** 2 + (restY - y) ** 2 < releaseRadius ** 2) isPunctured[i] = 1
+  }
+}
+
+function cutAlongDrag() {
+  const steps = Math.ceil(Math.hypot(pointer.x - lastCut.x, pointer.y - lastCut.y) / 4)
+  for (let step = 1; step <= steps; step++) {
+    cutCloth(lastCut.x + (pointer.x - lastCut.x) * step / steps, lastCut.y + (pointer.y - lastCut.y) * step / steps, knifeRadius, step)
+  }
+  lastCut = { x: pointer.x, y: pointer.y }
 }
 
 function placeBalls(seconds, burstSeconds, width, height) {
@@ -143,7 +128,7 @@ async function startRip() {
   // Safari never loads lazy images inside html2canvas's offscreen clone, so the snapshot hangs forever
   document.querySelectorAll('img').forEach(image => image.loading = 'eager')
   const snapshot = await html2canvas(document.body, { x: scrollX, y: scrollY, width: innerWidth, height: innerHeight, scale: pixelRatio })
-  const width = innerWidth, height = innerHeight
+  const width = pageWidth = innerWidth, height = pageHeight = innerHeight
 
   const renderer = new THREE.WebGLRenderer({ antialias: true })
   renderer.setPixelRatio(pixelRatio)
@@ -176,10 +161,19 @@ async function startRip() {
 
   const texture = new THREE.CanvasTexture(snapshot)
   texture.colorSpace = THREE.SRGBColorSpace
+  const maskCanvas = document.createElement('canvas')
+  maskCanvas.width = 1024
+  maskCanvas.height = Math.round(1024 * height / width)
+  holeMask = maskCanvas.getContext('2d')
+  holeMask.fillStyle = 'white'
+  holeMask.fillRect(0, 0, maskCanvas.width, maskCanvas.height)
+  holeMask.fillStyle = 'black'
+  holeTexture = new THREE.CanvasTexture(maskCanvas)
+
   rows = Math.round(columns * height / width)
   const geometry = new THREE.PlaneGeometry(width, height, columns - 1, rows - 1).translate(width / 2, height / 2, 0)
-  geometry.setIndex(new THREE.BufferAttribute(new Uint32Array((columns - 1) * (rows - 1) * 6), 1))
-  const clothMesh = new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({ map: texture, side: THREE.DoubleSide }))
+  const clothMaterial = new THREE.MeshLambertMaterial({ map: texture, alphaMap: holeTexture, alphaTest: 0.5, side: THREE.DoubleSide })
+  const clothMesh = new THREE.Mesh(geometry, clothMaterial)
   clothMesh.castShadow = clothMesh.receiveShadow = true
   scene.add(clothMesh)
 
@@ -191,17 +185,15 @@ async function startRip() {
   linkStart = new Uint32Array(maximumLinks)
   linkEnd = new Uint32Array(maximumLinks)
   linkRestLength = new Float32Array(maximumLinks)
-  linkIsBroken = new Uint8Array(maximumLinks)
   for (let i = 0; i < columns * rows; i++) {
     const column = i % columns, row = Math.floor(i / columns)
     if (row === 0 || row === rows - 1 || column === 0 || column === columns - 1) isPinned[i] = 1
-    if (column < columns - 1) rightLinks[i] = linkParticles(i, i + 1)
-    if (row < rows - 1) downLinks[i] = linkParticles(i, i + columns)
-    if (column < columns - 1 && row < rows - 1) diagonalLinks[i] = linkParticles(i + columns, i + 1)
+    if (column < columns - 1) linkParticles(i, i + 1)
+    if (row < rows - 1) linkParticles(i, i + columns)
+    if (column < columns - 1 && row < rows - 1) linkParticles(i + columns, i + 1)
     if (column < columns - 2) linkParticles(i, i + 2)
     if (row < rows - 2) linkParticles(i, i + columns * 2)
   }
-  if (pointer.isDown) grabClothPatch()
 
   const chrome = new THREE.MeshPhysicalMaterial({ color: '#b48cff', metalness: 0.6, roughness: 0.15, clearcoat: 1, iridescence: 1 })
   const metaballs = new MarchingCubes(isTouchDevice ? 32 : 64, chrome, false, false, 200000)
@@ -225,9 +217,11 @@ async function startRip() {
     metaballs.update()
 
     simulateCloth()
-    for (const ball of balls) pushClothOutOfBall(ball, ballRadius)
-    geometry.setDrawRange(0, writeVisibleTriangles(geometry.index.array))
-    geometry.index.needsUpdate = true
+    balls.forEach((ball, index) => {
+      pushClothOutOfBall(ball, ballRadius)
+      const pushedThrough = ball.z + ballRadius * punctureDepth
+      if (pushedThrough > 0) cutCloth(ball.x, ball.y, Math.min(pushedThrough * 2, ballRadius), index)
+    })
     geometry.attributes.position.needsUpdate = true
     geometry.computeVertexNormals()
     renderer.render(scene, camera)
@@ -237,7 +231,7 @@ async function startRip() {
 addEventListener('pointerdown', event => {
   pointer.isDown = true
   updatePointer(event)
-  if (ripStarted) return positions && grabClothPatch()
+  if (ripStarted) return lastCut = { x: pointer.x, y: pointer.y }
   if (event.target.closest('a, video, button')) return
   dragStart = { x: pointer.x, y: pointer.y }
   if (event.pointerType !== 'mouse' && event.target.closest('#peel')) startRip()
@@ -245,6 +239,7 @@ addEventListener('pointerdown', event => {
 
 addEventListener('pointermove', event => {
   updatePointer(event)
+  if (lastCut && holeMask) return cutAlongDrag()
   const draggedFar = dragStart && Math.hypot(pointer.x - dragStart.x, pointer.y - dragStart.y) > 30
   if (!ripStarted && event.pointerType === 'mouse' && draggedFar) startRip()
 })
@@ -256,5 +251,5 @@ addEventListener('deviceorientation', event => {
 })
 
 setTimeout(() => ripStarted || startRip(), burstAfterSeconds * 1000)
-addEventListener('pointerup', releaseParticle)
-addEventListener('pointercancel', releaseParticle)
+addEventListener('pointerup', releasePointer)
+addEventListener('pointercancel', releasePointer)
