@@ -69,7 +69,7 @@ void main() {
   } else {
     float shedAt = mix(0.7, 0.92, part.y);
     float age = fract(life - shedAt) * lifetime;
-    fade = smoothstep(0.0, 0.3, age) * (1.0 - smoothstep(0.0, 7.0, age));
+    fade = smoothstep(0.0, 1.0, age) * (1.0 - smoothstep(1.0, 7.0, age));
     float direction = part.x * 2.39996 + spin;
     vec2 drift = vec2(cos(direction), sin(direction)) * (radius * 0.7 + age * 10.0)
       + vec2(18.0 + 10.0 * sin(time * 0.3 + part.y * 6.0), -14.0) * age
@@ -120,12 +120,13 @@ vec4 petalRing(vec2 p, float count, float angleOffset, float reach, float width,
   for (int side = -1; side <= 1; side++) {
     float index = nearest + float(side);
     float id = mod(index, count) + layer * 37.0 + look * 113.0;
-    if (hash(id) < shed) continue;
+    float leaving = smoothstep(hash(id) * 0.8, hash(id) * 0.8 + 0.2, shed);
+    if (leaving > 0.999) continue;
     float offset = angle - index * sector;
     vec2 along;
-    float cover = petal(length(p) * vec2(cos(offset), sin(offset)), reach * (0.9 + 0.2 * hash(id + 5.0)), width, notch, edge, along);
+    float cover = petal(length(p) * vec2(cos(offset), sin(offset)), reach * (0.9 + 0.2 * hash(id + 5.0)) * (1.0 + 0.25 * leaving), width, notch, edge, along);
     vec3 surface = normalize(vec3(-normalize(p + 0.0001) * cup * along.x, 1.0));
-    ring = mix(ring, vec4(shadePetal(color, along, id, max(dot(surface, lightInFlower), 0.0)), 1.0), cover);
+    ring = mix(ring, vec4(shadePetal(color, along, id, max(dot(surface, lightInFlower), 0.0)), 1.0), cover * (1.0 - leaving));
   }
   return ring;
 }
