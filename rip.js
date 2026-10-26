@@ -10,7 +10,7 @@ const tilt = { x: 0, y: 0 }
 let linkStart, linkEnd, linkRestLength, linkCount = 0
 let dragStart = null, lastCut = null, pressStartTime = 0, ripStarted = false, askedForGyro = false
 let viewWidth, viewHeight, rowSpacing, rows, positions, previousPositions, isPinned, isPunctured
-let holeMask, holeTexture, pagePointAt, pageLinks = [], scrolledRows = 0
+let holeMask, holeTexture, pagePointAt, pageLinks = [], scrolledRows = 0, cellScale = 1
 
 function updatePointer(event) {
   pointer.x = event.clientX
@@ -64,7 +64,7 @@ function followScroll() {
 }
 
 function simulateCloth(seconds) {
-  const gust = windStrength * (0.6 + 0.4 * Math.sin(seconds * 0.3))
+  const gust = windStrength * cellScale * (0.6 + 0.4 * Math.sin(seconds * 0.3))
   for (let i = 0; i < columns * rows; i++) {
     if (isPinned[i] || isPunctured[i]) continue
     for (let axis = 0; axis < 3; axis++) {
@@ -74,7 +74,7 @@ function simulateCloth(seconds) {
       positions[index] += velocity
     }
     const x = positions[i * 3], y = positions[i * 3 + 1]
-    positions[i * 3 + 1] -= gravity
+    positions[i * 3 + 1] -= gravity * cellScale
     positions[i * 3 + 2] += gust * (Math.sin(x * 0.012 + seconds * 0.8) * Math.sin(y * 0.009 + seconds * 0.6) + 0.5 * Math.sin((x + y) * 0.006 - seconds * 1.0))
   }
   for (let iteration = 0; iteration < relaxIterations; iteration++) {
@@ -116,7 +116,7 @@ function cutCloth(x, y, radius, seed) {
 function cutAlongDrag() {
   const steps = Math.ceil(Math.hypot(pointer.x - lastCut.x, pointer.y - lastCut.y) / 4)
   for (let step = 1; step <= steps; step++) {
-    cutCloth(lastCut.x + (pointer.x - lastCut.x) * step / steps, lastCut.y + (pointer.y - lastCut.y) * step / steps, knifeRadius, step)
+    cutCloth(lastCut.x + (pointer.x - lastCut.x) * step / steps, lastCut.y + (pointer.y - lastCut.y) * step / steps, knifeRadius * cellScale, step)
   }
   lastCut = { x: pointer.x, y: pointer.y }
 }
@@ -203,6 +203,8 @@ async function startRip() {
   scene.add(flowers.field)
   rows = Math.round(columns * height / width)
   rowSpacing = height / (rows - 1)
+  // Knife, slash, gravity and wind are tuned for a phone's 5 pixel cloth cells, so bigger screens scale them up to match
+  cellScale = rowSpacing / 5
   const geometry = new THREE.PlaneGeometry(width, height, columns - 1, rows - 1).translate(width / 2, height / 2, 0)
   const clothMaterial = new THREE.MeshLambertMaterial({ map: texture, emissiveMap: texture, emissive: '#ffffff', alphaMap: holeTexture, alphaTest: 0.5, side: THREE.DoubleSide })
   const clothMesh = new THREE.Mesh(geometry, clothMaterial)
@@ -258,7 +260,7 @@ async function startRip() {
       slashDone = Math.min(slashDone + 0.004, slashTarget)
       const slashX = slashFrom.x + (slashTo.x - slashFrom.x) * slashDone
       const slashY = slashFrom.y + (slashTo.y - slashFrom.y) * slashDone + Math.sin(slashDone * Math.PI) * height * 0.08
-      cutCloth(slashX, slashY, slashRadius, slashDone * 100)
+      cutCloth(slashX, slashY, slashRadius * cellScale, slashDone * 100)
     }
 
     simulateCloth(seconds)
