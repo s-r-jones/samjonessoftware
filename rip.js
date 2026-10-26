@@ -4,11 +4,11 @@ const setting = (name, fallback) => Number(urlSettings.get(name) ?? fallback)
 const columns = setting('columns', isTouchDevice ? 80 : 160)
 const relaxIterations = setting('iterations', 4), burstAfterSeconds = setting('burst', 5)
 const flowerCount = setting('flowers', isTouchDevice ? 300 : 700), windStrength = setting('wind', 0.15)
-const gravity = 0.04, damping = 0.98, knifeRadius = 22, slashRadius = 30, maskScale = 0.5
+const gravity = 0.04, damping = 0.98, knifeRadius = 22, slashRadius = 30, maskScale = 0.5, holdToCutMilliseconds = 150
 const pointer = { x: 0, y: 0, isDown: false }
 const tilt = { x: 0, y: 0 }
 let linkStart, linkEnd, linkRestLength, linkCount = 0
-let dragStart = null, lastCut = null, ripStarted = false, askedForGyro = false
+let dragStart = null, lastCut = null, pressStartTime = 0, ripStarted = false, askedForGyro = false
 let viewWidth, viewHeight, rowSpacing, rows, positions, previousPositions, isPinned, isPunctured
 let holeMask, holeTexture, pagePointAt, pageLinks = [], scrolledRows = 0, scrollRemainder = 0
 
@@ -164,7 +164,7 @@ async function startRip() {
   renderer.setSize(width, height)
   renderer.shadowMap.enabled = true
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
-  renderer.domElement.style.cssText += 'position:fixed;top:0;left:0;z-index:9999;touch-action:pan-y;visibility:visible'
+  renderer.domElement.style.cssText += 'position:fixed;top:0;left:0;z-index:9999;touch-action:pan-y;-webkit-user-select:none;-webkit-touch-callout:none;visibility:visible'
   document.body.append(renderer.domElement)
   document.body.style.visibility = 'hidden'
 
@@ -275,6 +275,7 @@ addEventListener('pointerdown', event => {
   updatePointer(event)
   if (ripStarted) {
     dragStart = lastCut = { x: pointer.x, y: pointer.y }
+    pressStartTime = performance.now()
     return
   }
   if (event.target.closest('a, video, button')) return
@@ -287,6 +288,12 @@ addEventListener('pointermove', event => {
   if (lastCut && holeMask) return dragDistance > 8 && cutAlongDrag()
   if (!ripStarted && event.pointerType === 'mouse' && dragDistance > 30) startRip()
 })
+
+// A quick swipe scrolls the page, but a finger held still for a moment becomes a knife that can cut in any direction
+addEventListener('touchmove', event => {
+  const isHoldingKnife = lastCut && performance.now() - pressStartTime > holdToCutMilliseconds
+  if (isHoldingKnife) event.preventDefault()
+}, { passive: false })
 
 addEventListener('pointerup', event => {
   updatePointer(event)
