@@ -7,7 +7,7 @@ const seasonHexes = [
   ['#ff2a14', '#ff7a00', '#ffc400', '#ff1f7a', '#ff4d4d'],
   ['#e8002f', '#fff6ee', '#ff9fbc', '#ff3d5e', '#ffd87a']
 ]
-const flowersPerColony = 10, loosePetalsPerFlower = 6
+const flowersPerColony = 10, loosePetalsPerFlower = 4
 
 const flowerVertexShader = `
 uniform float time, cameraDistance;
@@ -243,9 +243,9 @@ export function createFlowerField(THREE, { flowerCount, moteCount, width, height
   const parts = []
   for (let colonyIndex = 0; colonyIndex < flowerCount / flowersPerColony; colonyIndex++) {
     const colony = [Math.random(), Math.random(), Math.random(), Math.random()]
-    const colonyDepth = -180 - Math.random() * 560
+    const colonyDepth = -200 - Math.random() * 900
     for (let flowerIndex = 0; flowerIndex < flowersPerColony; flowerIndex++) {
-      const flower = [nearColonyCenter(), nearColonyCenter(), colonyDepth + (Math.random() - 0.5) * 100, Math.random()]
+      const flower = [nearColonyCenter(), nearColonyCenter(), colonyDepth + (Math.random() - 0.5) * 200, Math.random()]
       for (let petal = -1; petal < loosePetalsPerFlower; petal++) parts.push({ colony, flower, part: [petal, Math.random()] })
     }
   }

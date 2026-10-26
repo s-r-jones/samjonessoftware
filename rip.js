@@ -2,9 +2,9 @@ const isTouchDevice = matchMedia('(pointer: coarse)').matches
 const urlSettings = new URLSearchParams(location.search)
 const setting = (name, fallback) => Number(urlSettings.get(name) ?? fallback)
 const columns = setting('columns', isTouchDevice ? 80 : 160)
-const relaxIterations = setting('iterations', 4), burstAfterSeconds = setting('burst', 5)
-const flowerCount = setting('flowers', isTouchDevice ? 300 : 700), windStrength = setting('wind', 0.15)
-const gravity = 0.04, damping = 0.98, knifeRadius = 22, slashRadius = 30, maskScale = 0.5, holdToCutMilliseconds = 150
+const relaxIterations = setting('iterations', 4), burstAfterSeconds = setting('burst', 8)
+const flowerCount = setting('flowers', isTouchDevice ? 220 : 500), windStrength = setting('wind', 0.15)
+const gravity = 0.04, damping = 0.98, knifeRadius = 19, slashRadius = 30, maskScale = 0.5, holdToCutMilliseconds = 100
 const pointer = { x: 0, y: 0, isDown: false }
 const tilt = { x: 0, y: 0 }
 let linkStart, linkEnd, linkRestLength, linkCount = 0
@@ -289,9 +289,13 @@ addEventListener('pointermove', event => {
   if (!ripStarted && event.pointerType === 'mouse' && dragDistance > 30) startRip()
 })
 
-// A quick swipe scrolls the page, but a finger held still for a moment becomes a knife that can cut in any direction
+// A quick flick scrolls the page, but a finger that rests for a moment becomes a knife that can cut in any direction.
+// Safari decides on the first touchmove whether to scroll, and a resting finger jitters, so tiny moves count as resting.
 addEventListener('touchmove', event => {
-  const isHoldingKnife = lastCut && performance.now() - pressStartTime > holdToCutMilliseconds
+  if (!lastCut) return
+  const touch = event.touches[0]
+  const isStillResting = Math.hypot(touch.clientX - dragStart.x, innerHeight - touch.clientY - dragStart.y) < 6
+  const isHoldingKnife = isStillResting || performance.now() - pressStartTime > holdToCutMilliseconds
   if (isHoldingKnife) event.preventDefault()
 }, { passive: false })
 
