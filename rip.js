@@ -3,7 +3,7 @@ const urlSettings = new URLSearchParams(location.search)
 const setting = (name, fallback) => Number(urlSettings.get(name) ?? fallback)
 const columns = setting('columns', isTouchDevice ? 80 : 160)
 const relaxIterations = setting('iterations', 4), burstAfterSeconds = setting('burst', 5)
-const flowerCount = setting('flowers', isTouchDevice ? 150 : 350), windStrength = setting('wind', 0.15)
+const flowerCount = setting('flowers', isTouchDevice ? 300 : 700), windStrength = setting('wind', 0.15)
 const gravity = 0.04, damping = 0.98, knifeRadius = 22, slashRadius = 30, maskScale = 0.5
 const pointer = { x: 0, y: 0, isDown: false }
 const tilt = { x: 0, y: 0 }
@@ -261,7 +261,7 @@ async function startRip() {
     clothMesh.position.y = scrollRemainder
     for (const pageTexture of [texture, holeTexture]) pageTexture.offset.y = 1 - (scrolledRows * rowSpacing + height) / pageHeight
     // Starting the clock at the longest flower lifetime means every flower already on screen was born in spring
-    flowers.uniforms.time.value = seconds - ripStartSeconds + 24
+    flowers.uniforms.time.value = seconds - ripStartSeconds + 50
     flowers.field.position.set(tilt.x, tilt.y, 0)
     const slashTarget = Math.min(Math.max(tearSeconds / 0.8, 0), 1)
     while (slashDone < slashTarget) {

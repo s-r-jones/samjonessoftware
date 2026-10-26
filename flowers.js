@@ -1,151 +1,219 @@
-// Every flower, petal and drifting mote is animated on the GPU from its own random seed, so each one lives a different life.
-// Flowers bud, bloom, then shed their petals into the wind, like teamLab's "Flowers and People".
-// A flower takes the colors of the season it was born in, so the field turns over gradually.
+// Flowers are painted petal by petal in the fragment shader, like the hand-drawn flowers in teamLab's "Flowers and People".
+// Four kinds: blossoms with stamens, gerberas with a dark eye, layered dahlias, and roses with a swirled heart.
+// They rise in colonies of related colors, bud, bloom, wither, and scatter loose petals that tumble away.
 const seasonHexes = [
-  ['#ffc4d6', '#ff9ebb', '#ffffff', '#ffe3ec', '#ffb3c8'],
-  ['#4b4bd8', '#7a5cff', '#8fb4ff', '#f4f6ff', '#5b8cff'],
-  ['#e8102e', '#ff5a1f', '#ffc21a', '#b0002a', '#ff8a3d'],
-  ['#d7003a', '#ffffff', '#ffd1dc', '#c2002f', '#ffffff']
+  ['#ffb3cc', '#ff6f9f', '#fff2f6', '#ffe04a', '#ff8fc0'],
+  ['#4f63ff', '#9b5cff', '#c6d4ff', '#ffffff', '#ffcf33'],
+  ['#ff2a14', '#ff7a00', '#ffc400', '#ff1f7a', '#ff4d4d'],
+  ['#e8002f', '#fff6ee', '#ff9fbc', '#ff3d5e', '#ffd87a']
 ]
-const partsPerFlower = 16
+const flowersPerColony = 10, loosePetalsPerFlower = 6
 
-const flowerLifeGlsl = `
-uniform float time, cameraDistance, pixelRatio;
+const flowerVertexShader = `
+uniform float time, cameraDistance;
 uniform vec2 viewSize;
 uniform vec3 seasonColors[20];
-attribute vec4 seed;
+attribute vec4 colony, flower;
+attribute vec2 part;
+varying vec2 local;
+varying vec3 petalColor;
+varying float species, look, open, wither, shed, blur, fade, isLoosePetal;
 
-float lifetimeOf(vec4 seed) { return 14.0 + seed.w * 10.0; }
-float lifeOf(vec4 seed) { return fract(time / lifetimeOf(seed) + seed.z); }
-float sizeOf(vec4 seed) { return seed.w > 0.8 ? 14.0 + fract(seed.x * 37.0) * 12.0 : 22.0 + fract(seed.z * 53.1) * 30.0; }
-
-vec3 centerOf(vec4 seed, float life) {
-  float screenY = life * viewSize.y * 1.4 - viewSize.y * 0.2;
-  float screenX = seed.x * viewSize.x * 1.2 - viewSize.x * 0.1
-    + sin(screenY * 0.004 + seed.z * 6.28 + time * 0.2) * 70.0
-    + sin(screenY * 0.013 + seed.w * 6.28) * 20.0;
-  float stretch = (cameraDistance - seed.y) / cameraDistance;
-  return vec3(viewSize * 0.5 + (vec2(screenX, screenY) - viewSize * 0.5) * stretch, seed.y);
-}
-
-vec3 seasonColor(float moment, float pick) {
-  float season = mod(floor(moment / 60.0), 4.0);
-  return seasonColors[int(season * 5.0 + floor(pick * 4.99))];
-}
-
+float hash(float n) { return fract(sin(n) * 43758.5453); }
 vec3 turnX(vec3 p, float angle) { return vec3(p.x, p.y * cos(angle) - p.z * sin(angle), p.y * sin(angle) + p.z * cos(angle)); }
 vec3 turnY(vec3 p, float angle) { return vec3(p.x * cos(angle) + p.z * sin(angle), p.y, -p.x * sin(angle) + p.z * cos(angle)); }
 vec3 turnZ(vec3 p, float angle) { return vec3(p.x * cos(angle) - p.y * sin(angle), p.x * sin(angle) + p.y * cos(angle), p.z); }
-`
 
-const petalVertexShader = flowerLifeGlsl + `
-attribute vec2 part;
-varying vec3 petalColor, viewNormal;
-varying float alongPetal;
+vec3 centerAt(float rise) {
+  float y = rise * viewSize.y * 1.5 - viewSize.y * 0.25 + flower.y * 60.0;
+  float x = colony.x * viewSize.x * 1.2 - viewSize.x * 0.1 + flower.x * 80.0
+    + sin(y * 0.0035 + colony.y * 6.28) * 70.0 + sin(time * 0.15 + flower.w * 6.28) * 14.0;
+  float stretch = (cameraDistance - flower.z) / cameraDistance;
+  return vec3(viewSize * 0.5 + (vec2(x, y) - viewSize * 0.5) * stretch, flower.z);
+}
 
 void main() {
-  float life = lifeOf(seed);
-  float isRose = step(seed.w, 0.5), isBlossom = step(0.8, seed.w);
-  float petalCount = isRose * 13.0 + isBlossom * 5.0 + (1.0 - isRose - isBlossom) * 9.0;
-  float isLeaf = step(petalCount, part.x) * (1.0 - isBlossom);
-  float isUsed = step(part.x, petalCount + 2.5 - isBlossom * 3.0);
-  float outerness = part.x / (petalCount - 1.0);
+  float riseLifetime = 30.0 + colony.z * 16.0;
+  float rise = fract((time + hash(flower.w * 17.0) * 3.0) / riseLifetime + colony.y);
+  float lifetime = 14.0 + hash(flower.w * 23.0) * 10.0;
+  float life = fract(time / lifetime + hash(flower.w * 29.0));
+  species = floor(hash(flower.w * 7.3) * 4.0);
+  look = flower.w;
+  open = smoothstep(0.04, 0.32, life);
+  wither = smoothstep(0.62, 0.86, life);
+  shed = smoothstep(0.7, 0.92, life);
+  blur = smoothstep(60.0, 400.0, abs(flower.z + 300.0)) * 0.3;
 
-  float open = smoothstep(0.02, 0.4, life);
-  float shed = smoothstep(0.55 + part.y * 0.25, 1.0, life);
-  float roseOpening = 0.12 + open * (0.15 + 1.3 * outerness);
-  float flatOpening = 0.3 + open * (isBlossom * 1.25 + (1.0 - isBlossom) * (1.05 + 0.3 * outerness));
-  float openAngle = mix(mix(flatOpening, roseOpening, isRose), 1.75, isLeaf);
-  float spiralStep = mix(6.2832 / petalCount, 2.39996, isRose);
-  float azimuth = mix(part.x * spiralStep, part.x * 2.1 + 0.5, isLeaf) + seed.z * 6.28 + time * 0.1;
-  float petalScale = mix(1.0, 0.45 + 0.6 * outerness, isRose);
-  vec3 shape = position * mix(vec3(petalScale * 0.9, petalScale, petalScale), vec3(0.45, 1.4, 0.45), isLeaf);
-  float flutter = shed * (sin(time * 3.0 + part.y * 20.0) * 1.5 + part.y * 6.0);
-  vec2 tilt = vec2((fract(seed.x * 17.3) - 0.5) * 1.4 + sin(time * 0.6 + seed.z * 20.0) * 0.15, (fract(seed.z * 29.1) - 0.5) * 1.4);
+  float season = mod(floor((time - life * lifetime) / 80.0), 4.0);
+  float pick = hash(flower.w * 3.1) < 0.7 ? colony.w : hash(flower.w * 5.9);
+  petalColor = seasonColors[int(season * 5.0 + floor(pick * 4.99))];
 
-  vec3 placed = turnZ(turnX(turnY(turnX(turnZ(shape, flutter), openAngle), azimuth), 1.5708 + tilt.x), tilt.y);
-  vec3 bent = turnZ(turnX(turnY(turnX(turnZ(normal, flutter), openAngle), azimuth), 1.5708 + tilt.x), tilt.y);
-  vec3 outward = turnZ(turnX(turnY(vec3(0.0, shed * 1.5, 0.05 + shed * 2.5), azimuth), 1.5708 + tilt.x), tilt.y);
-  vec3 wind = shed * vec3(sin(time * 0.7 + part.y * 30.0) * 60.0, shed * 160.0, 0.0);
-  float flowerScale = sizeOf(seed) * (0.35 + 0.65 * open) * (1.0 - smoothstep(0.88, 1.0, life)) * isUsed;
-  vec3 world = centerOf(seed, life) + (placed + outward) * flowerScale + wind;
-
-  vec3 color = seasonColor(time - life * lifetimeOf(seed), fract(seed.z * 91.7));
-  petalColor = mix(mix(color, vec3(1.0), (1.0 - outerness) * 0.35 * isRose) * (0.85 + 0.3 * part.y), vec3(0.04, 0.22, 0.09), isLeaf);
-  viewNormal = mat3(viewMatrix) * bent;
-  alongPetal = uv.y;
-  gl_Position = projectionMatrix * viewMatrix * vec4(world, 1.0);
+  float radius = (22.0 + pow(hash(flower.w * 11.0), 2.0) * 40.0) * (species < 0.5 ? 0.75 : 1.0);
+  float spin = flower.w * 40.0 + time * 0.08 * (hash(flower.w * 2.0) - 0.5);
+  vec2 tilt = (vec2(hash(flower.w * 3.0), hash(flower.w * 4.0)) - 0.5) * 1.3 + sin(time * 0.4 + flower.w * 30.0) * 0.12;
+  isLoosePetal = step(0.0, part.x);
+  vec3 center, corner;
+  if (isLoosePetal < 0.5) {
+    local = position.xy * 1.9;
+    fade = 1.0 - smoothstep(0.93, 1.0, life);
+    center = centerAt(rise);
+    corner = turnZ(vec3(local * radius * (0.35 + 0.65 * smoothstep(0.0, 0.3, life)), 0.0), spin);
+  } else {
+    float shedAt = mix(0.7, 0.92, part.y);
+    float age = fract(life - shedAt) * lifetime;
+    fade = smoothstep(0.0, 0.3, age) * (1.0 - smoothstep(0.0, 7.0, age));
+    float direction = part.x * 2.39996 + spin;
+    vec2 drift = vec2(cos(direction), sin(direction)) * (radius * 0.7 + age * 10.0)
+      + vec2(18.0 + 10.0 * sin(time * 0.3 + part.y * 6.0), -14.0) * age
+      + vec2(sin(age * 1.9 + part.y * 30.0), cos(age * 1.3 + part.y * 20.0)) * 12.0 * min(age, 1.0);
+    center = centerAt(fract(rise - age / riseLifetime)) + vec3(drift, 0.0);
+    local = position.xy * 1.4;
+    float tumble = age * (2.0 + part.y * 3.0) + part.y * 6.0;
+    corner = turnZ(vec3(position.x * max(abs(cos(tumble)), 0.25), position.y, 0.0) * radius * 0.45, direction + age * (part.y - 0.5) * 1.5);
+  }
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(center + turnY(turnX(corner, tilt.x), tilt.y), 1.0);
 }`
 
-// Thin petals glow where light passes through their edges, and brighten toward the base
-const petalFragmentShader = `
-varying vec3 petalColor, viewNormal;
-varying float alongPetal;
+const flowerFragmentShader = `
+varying vec2 local;
+varying vec3 petalColor;
+varying float species, look, open, wither, shed, blur, fade, isLoosePetal;
+
+float hash(float n) { return fract(sin(n) * 43758.5453); }
+vec2 turn(vec2 p, float angle) { return vec2(p.x * cos(angle) + p.y * sin(angle), -p.x * sin(angle) + p.y * cos(angle)); }
+
+// One petal growing along +x from the origin. "along" reports how far out (x) and how far across (y) this pixel sits on it.
+float petal(vec2 q, float reach, float width, float notch, float edge, out vec2 along) {
+  float tipDip = notch * (1.0 - smoothstep(0.0, width * reach * 0.6, abs(q.y)));
+  float t = q.x / (reach * (1.0 - tipDip));
+  float widest = pow(clamp(t, 0.0, 1.0), 1.4) * 2.0 - 1.0;
+  float halfWidth = width * reach * sqrt(max(1.0 - widest * widest, 0.0));
+  along = vec2(t, abs(q.y) / max(halfWidth, 0.0001));
+  return smoothstep(edge, -edge, abs(q.y) - halfWidth) * smoothstep(-edge, edge, q.x) * step(t, 1.0);
+}
+
+// Dark at the base where inner petals shade it, faint veins, light at the tip, a painted darker edge
+vec3 shadePetal(vec3 color, vec2 along, float id) {
+  float baseShadow = mix(0.5, 1.0, smoothstep(0.0, 0.6, along.x));
+  float veins = 1.0 - 0.12 * (0.5 + 0.5 * cos(along.y * 10.0)) * smoothstep(0.1, 0.9, along.x);
+  vec3 shaded = color * baseShadow * veins * (0.85 + 0.3 * hash(id));
+  return mix(shaded, vec3(1.0), smoothstep(0.5, 1.0, along.x) * 0.25) * (1.0 - smoothstep(0.75, 1.0, along.y) * 0.25);
+}
+
+// A ring of petals, each overlapping the next like a pinwheel. Shed petals drop out one by one.
+vec4 petalRing(vec2 p, float count, float angleOffset, float reach, float width, float notch, vec3 color, float edge, float layer) {
+  float sector = 6.28318 / count;
+  float angle = mod(atan(p.y, p.x) - angleOffset, 6.28318);
+  float nearest = floor(angle / sector + 0.5);
+  vec4 ring = vec4(0.0);
+  for (int side = -1; side <= 1; side++) {
+    float index = nearest + float(side);
+    float id = mod(index, count) + layer * 37.0 + look * 113.0;
+    if (hash(id) < shed) continue;
+    float offset = angle - index * sector;
+    vec2 along;
+    float cover = petal(length(p) * vec2(cos(offset), sin(offset)), reach * (0.9 + 0.2 * hash(id + 5.0)), width, notch, edge, along);
+    ring = mix(ring, vec4(shadePetal(color, along, id), 1.0), cover);
+  }
+  return ring;
+}
+
 void main() {
-  float facing = abs(normalize(viewNormal).z);
-  float throughLight = pow(1.0 - facing, 3.0);
-  vec3 color = petalColor * (0.55 + 0.45 * facing) * (1.15 - 0.35 * alongPetal) + petalColor * throughLight * 0.9 + (1.0 - alongPetal) * 0.12;
-  gl_FragColor = vec4(color, 1.0);
-  #include <colorspace_fragment>
+  int kind = int(species + 0.5);
+  float edge = length(fwidth(local)) * 0.7 + blur;
+  float r = length(local);
+  vec4 paint = vec4(0.0);
+  float glow;
+  vec2 along;
+
+  if (isLoosePetal > 0.5) {
+    float bend = (hash(look * 9.0) - 0.5) * 0.6;
+    float cover = petal(vec2(local.x + 1.0, local.y + bend * local.x * local.x), 2.0, kind == 0 || kind == 3 ? 0.4 : 0.22, kind == 0 ? 0.2 : 0.0, edge, along);
+    paint = vec4(shadePetal(petalColor, along, look), 1.0) * cover;
+    glow = pow(smoothstep(1.35, 0.0, r), 2.0) * 0.35;
+  } else {
+    vec3 color = mix(petalColor, petalColor * 0.3 + vec3(0.1, 0.06, 0.03), wither);
+
+    if (kind != 0) {
+      for (int leaf = 0; leaf < 2; leaf++) {
+        float cover = petal(turn(local, look * 20.0 + float(leaf) * 2.6), 1.7, 0.16, 0.0, edge, along);
+        vec3 leafColor = mix(vec3(0.04, 0.15, 0.09) * (0.7 + 0.6 * along.x), vec3(0.12, 0.3, 0.16), smoothstep(0.12, 0.0, along.y) * 0.6);
+        paint = mix(paint, vec4(mix(leafColor, vec3(0.12, 0.08, 0.04), wither), 1.0), cover * 0.9);
+      }
+    }
+
+    float layers = kind == 0 ? 1.0 : kind == 1 ? 2.0 : 3.0;
+    for (int layer = 0; layer < 3; layer++) {
+      float i = float(layer);
+      if (i >= layers) break;
+      float count = 5.0, width = 0.85, notch = 0.0, reach = 1.0 - i * 0.28;
+      vec3 layerColor = color * (1.0 - i * 0.12);
+      if (kind == 0) { count = look < 0.5 ? 5.0 : 8.0; width = look < 0.5 ? 0.55 : 0.36; notch = look < 0.5 ? 0.22 : 0.1; reach = 1.0; layerColor = color; }
+      if (kind == 1) { count = 16.0 + floor(look * 8.0); width = 0.15; notch = 0.05; reach = 1.0 - i * 0.2; layerColor = color * (1.0 - i * 0.15); }
+      if (kind == 2) { count = 13.0 - i * 2.0; width = 0.22; reach = 1.0 - i * 0.26; layerColor = mix(color, vec3(1.0), i * 0.18); }
+      float layerOpen = smoothstep(i * 0.12, 0.55 + i * 0.12, open);
+      reach *= mix(0.3, 1.0, layerOpen) * (1.0 - 0.35 * wither);
+      vec4 ring = petalRing(local, count, i * 3.14159 / count + look * 6.28 + (1.0 - layerOpen) * 1.2, reach, width * mix(0.6, 1.0, layerOpen), notch, layerColor, edge, i);
+      paint = ring + paint * (1.0 - ring.a);
+    }
+
+    float heart = r / (mix(0.5, 1.0, open) * (1.0 - 0.3 * wither));
+    float angle = atan(local.y, local.x);
+    if (kind == 0) {
+      float filamentGap = abs(fract(angle / 6.28318 * 12.0) - 0.5) * 6.28318 / 12.0 * r;
+      paint = mix(paint, vec4(1.0, 0.92, 0.95, 1.0), smoothstep(edge + 0.012, 0.0, filamentGap) * step(heart, 0.34) * 0.8);
+      paint = mix(paint, vec4(1.0, 0.82, 0.25, 1.0), smoothstep(0.05 + edge, 0.03, length(vec2(filamentGap, heart - 0.34))));
+      paint = mix(paint, vec4(0.85, 0.75, 0.3, 1.0), smoothstep(0.1 + edge, 0.1 - edge, heart));
+    } else if (kind == 1) {
+      float pollenGrain = 0.8 + 0.2 * sin(angle * 40.0) * sin(heart * 60.0);
+      paint = mix(paint, vec4(mix(vec3(1.0, 0.72, 0.1), color, 0.25) * pollenGrain, 1.0), smoothstep(0.3 + edge, 0.3 - edge, heart));
+      paint = mix(paint, vec4(0.18, 0.07, 0.03, 1.0), smoothstep(0.13 + edge, 0.13 - edge, heart));
+    } else if (kind == 2) {
+      paint = mix(paint, vec4(mix(color, vec3(1.0, 0.85, 0.4), 0.5), 1.0), smoothstep(0.14 + edge, 0.14 - edge, heart));
+    } else {
+      float swirl = 0.5 + 0.5 * sin(angle * 2.0 + log(max(heart, 0.01)) * 7.0 + look * 20.0);
+      paint = mix(paint, vec4(color * mix(0.6, 1.0, swirl), 1.0), smoothstep(0.3 + edge, 0.3 - edge, heart) * open);
+    }
+    glow = pow(smoothstep(1.85, 0.3, r), 1.5) * (0.2 + 0.35 * open) * (1.0 - 0.8 * wither);
+  }
+  // Glow is added light (alpha 0) and the painted flower covers what is behind it
+  gl_FragColor = vec4(paint.rgb + petalColor * glow * (1.0 - paint.a), paint.a) * fade;
 }`
 
-const haloVertexShader = flowerLifeGlsl + `
-varying vec3 glowColor;
+// Tiny gold pollen sparks, like the dots drifting between teamLab's flowers
+const moteVertexShader = `
+uniform float time, cameraDistance, pixelRatio;
+uniform vec2 viewSize;
+attribute vec4 seed;
+varying float brightness;
 void main() {
-  float life = lifeOf(seed);
-  float bloom = smoothstep(0.1, 0.4, life) * (1.0 - smoothstep(0.55, 0.8, life));
-  glowColor = seasonColor(time - life * lifetimeOf(seed), fract(seed.z * 91.7)) * bloom * 0.3;
-  vec4 viewPosition = viewMatrix * vec4(centerOf(seed, life), 1.0);
-  gl_PointSize = sizeOf(seed) * 5.0 * pixelRatio * cameraDistance / -viewPosition.z;
-  gl_Position = projectionMatrix * viewPosition;
-}`
-
-const moteVertexShader = flowerLifeGlsl + `
-varying vec3 glowColor;
-void main() {
-  float rise = fract(time * (0.01 + seed.w * 0.02) + seed.z);
-  vec2 screen = vec2(seed.x * viewSize.x * 1.4 - viewSize.x * 0.2 + sin(time * 0.3 + seed.z * 40.0) * 40.0, rise * viewSize.y * 1.6 - viewSize.y * 0.3);
+  float rise = fract(time * (0.008 + seed.w * 0.016) + seed.z);
+  vec2 screen = vec2(seed.x * viewSize.x * 1.4 - viewSize.x * 0.2 + sin(time * 0.3 + seed.z * 40.0) * 30.0, rise * viewSize.y * 1.6 - viewSize.y * 0.3);
   float stretch = (cameraDistance - seed.y) / cameraDistance;
-  glowColor = seasonColor(time, seed.w) * 0.8;
-  vec4 viewPosition = viewMatrix * vec4(viewSize * 0.5 + (screen - viewSize * 0.5) * stretch, seed.y, 1.0);
-  gl_PointSize = (6.0 + seed.w * 6.0) * pixelRatio * cameraDistance / -viewPosition.z;
+  vec4 viewPosition = modelViewMatrix * vec4(viewSize * 0.5 + (screen - viewSize * 0.5) * stretch, seed.y, 1.0);
+  brightness = 0.6 + 0.4 * sin(time * (1.0 + seed.w * 2.0) + seed.z * 50.0);
+  gl_PointSize = (3.0 + seed.w * 5.0) * pixelRatio * cameraDistance / -viewPosition.z;
   gl_Position = projectionMatrix * viewPosition;
 }`
 
-// The falloff reaches exactly zero inside the point, so overlapping glows never show square edges
-const softGlowFragmentShader = `
-varying vec3 glowColor;
+// The falloff reaches exactly zero inside the point, so overlapping sparks never show square edges
+const moteFragmentShader = `
+varying float brightness;
 void main() {
-  float glow = pow(max(1.0 - length(gl_PointCoord - 0.5) * 2.0, 0.0), 2.0);
-  gl_FragColor = vec4(glowColor * glow, 1.0);
-  #include <colorspace_fragment>
+  float glow = pow(max(1.0 - length(gl_PointCoord - 0.5) * 2.0, 0.0), 2.5);
+  gl_FragColor = vec4(vec3(1.0, 0.78, 0.35) * glow * brightness, 1.0);
 }`
 
-function cuppedPetal(THREE) {
-  const petal = new THREE.PlaneGeometry(1, 1, 2, 4).translate(0, 0.5, 0)
-  for (let i = 0; i < petal.attributes.position.count; i++) {
-    const x = petal.attributes.position.getX(i), y = petal.attributes.position.getY(i)
-    const width = 0.1 + 0.9 * Math.sin(Math.PI * Math.min(y * 1.1, 1))
-    petal.attributes.position.setXYZ(i, x * width, y, -x * x * 0.8 - y * y * 0.3)
-  }
-  petal.computeVertexNormals()
-  return petal
+function nearColonyCenter() {
+  return Math.random() + Math.random() + Math.random() - 1.5
 }
 
-function randomSeeds(count, repeatEach, nearest, farthest) {
-  const seeds = new Float32Array(count * repeatEach * 4)
-  for (let item = 0; item < count; item++) {
-    const itemSeed = [Math.random(), -nearest - Math.random() * (farthest - nearest), Math.random(), Math.random()]
-    for (let copy = 0; copy < repeatEach; copy++) seeds.set(itemSeed, (item * repeatEach + copy) * 4)
-  }
-  return seeds
-}
-
-function glowPoints(THREE, count, vertexShader, uniforms, nearest, farthest) {
+function pollenMotes(THREE, count, uniforms) {
   const geometry = new THREE.BufferGeometry()
+  const seeds = Array.from({ length: count }, () => [Math.random(), -200 - Math.random() * 1100, Math.random(), Math.random()])
   geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(count * 3), 3))
-  geometry.setAttribute('seed', new THREE.BufferAttribute(randomSeeds(count, 1, nearest, farthest), 4))
-  const material = new THREE.ShaderMaterial({ uniforms, vertexShader, fragmentShader: softGlowFragmentShader, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending })
+  geometry.setAttribute('seed', new THREE.BufferAttribute(new Float32Array(seeds.flat()), 4))
+  const material = new THREE.ShaderMaterial({ uniforms, vertexShader: moteVertexShader, fragmentShader: moteFragmentShader, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending })
   return new THREE.Points(geometry, material)
 }
 
@@ -155,20 +223,27 @@ export function createFlowerField(THREE, { flowerCount, moteCount, width, height
     cameraDistance: { value: cameraDistance },
     pixelRatio: { value: pixelRatio },
     viewSize: { value: new THREE.Vector2(width, height) },
-    seasonColors: { value: seasonHexes.flat().map(hex => new THREE.Color(hex)) }
+    seasonColors: { value: seasonHexes.flat().map(hex => new THREE.Color(hex).convertLinearToSRGB()) }
   }
-  const geometry = new THREE.InstancedBufferGeometry().copy(cuppedPetal(THREE))
-  geometry.instanceCount = flowerCount * partsPerFlower
-  geometry.setAttribute('seed', new THREE.InstancedBufferAttribute(randomSeeds(flowerCount, partsPerFlower, 150, 650), 4))
-  const parts = new Float32Array(flowerCount * partsPerFlower * 2)
-  for (let i = 0; i < flowerCount * partsPerFlower; i++) parts.set([i % partsPerFlower, Math.random()], i * 2)
-  geometry.setAttribute('part', new THREE.InstancedBufferAttribute(parts, 2))
-  const petals = new THREE.Mesh(geometry, new THREE.ShaderMaterial({ uniforms, vertexShader: petalVertexShader, fragmentShader: petalFragmentShader, side: THREE.DoubleSide }))
-  const halos = glowPoints(THREE, flowerCount, haloVertexShader, uniforms, 150, 650)
-  const oneSeedPerFlower = geometry.attributes.seed.array.filter((_, index) => Math.floor(index / 4) % partsPerFlower === 0)
-  halos.geometry.setAttribute('seed', new THREE.BufferAttribute(oneSeedPerFlower, 4))
-  const motes = glowPoints(THREE, moteCount, moteVertexShader, uniforms, 200, 1300)
-  const field = new THREE.Group().add(petals, halos, motes)
+  const parts = []
+  for (let colonyIndex = 0; colonyIndex < flowerCount / flowersPerColony; colonyIndex++) {
+    const colony = [Math.random(), Math.random(), Math.random(), Math.random()]
+    const colonyDepth = -180 - Math.random() * 560
+    for (let flowerIndex = 0; flowerIndex < flowersPerColony; flowerIndex++) {
+      const flower = [nearColonyCenter(), nearColonyCenter(), colonyDepth + (Math.random() - 0.5) * 100, Math.random()]
+      for (let petal = -1; petal < loosePetalsPerFlower; petal++) parts.push({ colony, flower, part: [petal, Math.random()] })
+    }
+  }
+  // Transparent flowers have to be drawn far to near
+  parts.sort((a, b) => a.flower[2] - b.flower[2])
+
+  const geometry = new THREE.InstancedBufferGeometry().copy(new THREE.PlaneGeometry(2, 2))
+  geometry.instanceCount = parts.length
+  for (const [name, size] of [['colony', 4], ['flower', 4], ['part', 2]]) {
+    geometry.setAttribute(name, new THREE.InstancedBufferAttribute(new Float32Array(parts.flatMap(item => item[name])), size))
+  }
+  const material = new THREE.ShaderMaterial({ uniforms, vertexShader: flowerVertexShader, fragmentShader: flowerFragmentShader, transparent: true, depthWrite: false, premultipliedAlpha: true, side: THREE.DoubleSide })
+  const field = new THREE.Group().add(new THREE.Mesh(geometry, material), pollenMotes(THREE, moteCount, uniforms))
   field.traverse(object => object.frustumCulled = false)
   return { field, uniforms }
 }
