@@ -3,16 +3,15 @@ const urlSettings = new URLSearchParams(location.search)
 const setting = (name, fallback) => Number(urlSettings.get(name) ?? fallback)
 const columns = setting('columns', isTouchDevice ? 80 : 160)
 const relaxIterations = setting('iterations', 4), ballDepth = setting('depth', -250)
-const burstAfterSeconds = setting('burst', 30), ballStrength = setting('ball', 0.45)
+const burstAfterSeconds = setting('burst', 30), ballStrength = setting('ball', 1.6), ballCount = setting('balls', 12)
 const windStrength = setting('wind', 0.15), pointerGravity = setting('gravity', 4500)
-const lampHexes = ['#a0d8ef', '#a59aca', '#e7609e', '#f4b3c2', '#f8b500']
-const gravity = 0.04, damping = 0.98, ballSubtract = 30, ballIsolation = 80, knifeRadius = 22, maskScale = 0.5
+const gravity = 0.04, damping = 0.98, ballSubtract = 60, ballIsolation = 80, knifeRadius = 22, slashRadius = 30, maskScale = 0.5
 const pointer = { x: 0, y: 0, isDown: false }
 const tilt = { x: 0, y: 0 }
 let linkStart, linkEnd, linkRestLength, linkCount = 0
 let dragStart = null, lastCut = null, ripStarted = false, askedForGyro = false
 let viewWidth, viewHeight, rowSpacing, rows, positions, previousPositions, isPinned, isPunctured
-let holeMask, holeTexture, balls, ballRadius, lampColors, pageLinks = [], scrolledRows = 0, scrollRemainder = 0
+let holeMask, holeTexture, balls, ballRadius, pageLinks = [], scrolledRows = 0, scrollRemainder = 0
 
 function updatePointer(event) {
   pointer.x = event.clientX
@@ -126,15 +125,11 @@ function cutAlongDrag() {
 }
 
 function homeOfBall(index, seconds) {
-  const angle = index * Math.PI * 2 / 5 + Math.sin(seconds * 0.1 + index) * 0.3
-  return { x: viewWidth / 2 + tilt.x + Math.cos(angle) * viewWidth * 0.28, y: viewHeight / 2 + tilt.y + Math.sin(angle) * viewHeight * 0.28 }
+  const angle = index * 2.4 + Math.sin(seconds * 0.1 + index) * 0.2, distance = Math.sqrt((index + 0.5) / ballCount) * 0.5
+  return { x: viewWidth / 2 + tilt.x + Math.cos(angle) * distance * viewWidth, y: viewHeight / 2 + tilt.y + Math.sin(angle) * distance * viewHeight }
 }
 
-function lampColor(phase) {
-  const position = Math.abs((phase * 2) % 2 - 1) * (lampColors.length - 1)
-  const lower = Math.min(Math.floor(position), lampColors.length - 2)
-  return lampColors[lower].clone().lerpHSL(lampColors[lower + 1], position - lower)
-}
+const fieldHue = (x, y, seconds) => 0.55 + 0.15 * (1 - Math.cos(seconds * 0.03)) + x / viewWidth * 0.18 + y / viewHeight * 0.08
 
 function moveBalls(seconds) {
   balls.forEach((ball, index) => {
@@ -150,7 +145,7 @@ function moveBalls(seconds) {
     }
     ball.velocityX *= 0.95
     ball.velocityY *= 0.95
-    ball.z = ballDepth + Math.sin(seconds * 0.2 + index) * 30
+    ball.z = ballDepth - (index % 4) * 60 + Math.sin(seconds * 0.2 + index) * 30
     ball.x += ball.velocityX
     ball.y += ball.velocityY
   })
@@ -266,22 +261,11 @@ async function startRip() {
   holeTexture = new THREE.CanvasTexture(maskCanvas)
   for (const pageTexture of [texture, holeTexture]) pageTexture.repeat.y = height / pageHeight
 
-  const reflectedPage = new THREE.CanvasTexture(snapshot)
-  reflectedPage.colorSpace = THREE.SRGBColorSpace
-  reflectedPage.repeat.y = height / pageHeight
-  reflectedPage.offset.y = 1 - (scrollY + height) / pageHeight
-  const pageForReflections = new THREE.Mesh(new THREE.PlaneGeometry(80, 80 * height / width), new THREE.MeshBasicMaterial({ map: reflectedPage }))
-  pageForReflections.position.z = 30
-  pageForReflections.rotation.y = Math.PI
-  const reflectedWorld = new THREE.Scene().add(nightSky(THREE, 50), pageForReflections)
-  scene.environment = new THREE.PMREMGenerator(renderer).fromScene(reflectedWorld).texture
-
-  lampColors = lampHexes.map(hex => new THREE.Color(hex))
   const moteCount = 500
   const motePositions = new Float32Array(moteCount * 3), moteColors = new Float32Array(moteCount * 3)
   for (let mote = 0; mote < moteCount; mote++) {
     motePositions.set([width / 2 + (Math.random() - 0.5) * 4000, (Math.random() * 2.3 - 0.3) * height, -300 - Math.random() * 3000], mote * 3)
-    lampColors[mote % lampColors.length].toArray(moteColors, mote * 3)
+    new THREE.Color().setHSL(0.7 + Math.random() * 0.25, 0.8, 0.7).toArray(moteColors, mote * 3)
   }
   const moteGeometry = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(motePositions, 3))
   moteGeometry.setAttribute('color', new THREE.BufferAttribute(moteColors, 3))
@@ -314,22 +298,47 @@ async function startRip() {
     if (row < rows - 2) linkParticles(i, i + columns * 2)
   }
 
-  const glass = new THREE.MeshPhysicalMaterial({ vertexColors: true, color: '#222222', roughness: 0.25, clearcoat: 0.3, clearcoatRoughness: 0.05, emissive: '#ffffff', emissiveIntensity: 1.6 })
-  glass.onBeforeCompile = shader => {
-    shader.fragmentShader = shader.fragmentShader.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance *= vColor.rgb;')
-  }
-  const metaballs = new MarchingCubes(isTouchDevice ? 32 : 64, glass, false, true, 200000)
+  // Frosted spheres lit from inside: one color field shared by every sphere, so overlapping spheres never mix into mud
+  const frostedLight = new THREE.ShaderMaterial({
+    uniforms: { seconds: { value: 0 }, viewSize: { value: new THREE.Vector2(width, height) } },
+    vertexShader: `
+      varying vec3 worldPosition, viewNormal, toCamera;
+      void main() {
+        vec4 world = modelMatrix * vec4(position, 1.0);
+        vec4 viewPosition = viewMatrix * world;
+        worldPosition = world.xyz;
+        viewNormal = normalize(normalMatrix * normal);
+        toCamera = -viewPosition.xyz;
+        gl_Position = projectionMatrix * viewPosition;
+      }`,
+    fragmentShader: `
+      uniform float seconds;
+      uniform vec2 viewSize;
+      varying vec3 worldPosition, viewNormal, toCamera;
+      vec3 hsv(float hue, float saturation, float value) {
+        vec3 channel = clamp(abs(mod(hue * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+        return value * mix(vec3(1.0), channel, saturation);
+      }
+      void main() {
+        float hue = 0.55 + 0.15 * (1.0 - cos(seconds * 0.03)) + worldPosition.x / viewSize.x * 0.18 + worldPosition.y / viewSize.y * 0.08;
+        float facing = max(dot(normalize(viewNormal), normalize(toCamera)), 0.0);
+        vec3 core = hsv(hue, 0.7, 1.0), rim = hsv(hue + 0.04, 1.0, 0.85);
+        gl_FragColor = vec4(mix(rim, core, facing * facing), 1.0);
+      }`
+  })
+  const metaballs = new MarchingCubes(isTouchDevice ? 32 : 64, frostedLight, false, false, 200000)
   metaballs.isolation = ballIsolation
   metaballs.position.set(width / 2, height / 2, -100)
   metaballs.scale.setScalar(Math.max(width, height) / 2)
-  metaballs.castShadow = true
   scene.add(metaballs)
   const toBox = (value, center) => (value - center) / metaballs.scale.x / 2 + 0.5
-  ballRadius = Math.sqrt(ballStrength / (ballSubtract + ballIsolation)) * 2 * metaballs.scale.x * 1.2
-  balls = Array.from({ length: 5 }, (_, index) => ({ ...homeOfBall(index, 0), z: ballDepth, velocityX: 0, velocityY: 0 }))
+  ballRadius = Math.sqrt(ballStrength / (ballSubtract + ballIsolation)) * 2 * metaballs.scale.x
+  balls = Array.from({ length: ballCount }, (_, index) => ({ ...homeOfBall(index, 0), z: ballDepth, velocityX: 0, velocityY: 0 }))
+  const slashFrom = { x: width * 0.03, y: height * 0.72 }, slashTo = { x: width * 0.97, y: height * 0.3 }
+  let slashDone = 0
   const halos = balls.map(() => {
     const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffTexture, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }))
-    halo.scale.setScalar(ballRadius * 4)
+    halo.scale.setScalar(ballRadius * 3)
     scene.add(halo)
     return halo
   })
@@ -351,15 +360,22 @@ async function startRip() {
       if (motePositions[mote * 3 + 1] > height * 2) motePositions[mote * 3 + 1] = -height * 0.3
     }
     moteGeometry.attributes.position.needsUpdate = true
-    if (tearSeconds > 0 && tearSeconds < 6) cutCloth(width / 2, height / 2, tearSeconds * Math.min(width, height) * 0.06, 0)
+    const slashTarget = Math.min(Math.max(tearSeconds / 0.8, 0), 1)
+    while (slashDone < slashTarget) {
+      slashDone = Math.min(slashDone + 0.004, slashTarget)
+      const slashX = slashFrom.x + (slashTo.x - slashFrom.x) * slashDone
+      const slashY = slashFrom.y + (slashTo.y - slashFrom.y) * slashDone + Math.sin(slashDone * Math.PI) * height * 0.08
+      cutCloth(slashX, slashY, slashRadius, slashDone * 100)
+    }
 
     moveBalls(seconds)
     metaballs.reset()
+    frostedLight.uniforms.seconds.value = seconds
     balls.forEach((ball, index) => {
-      const color = lampColor(seconds * 0.03 + index / balls.length)
-      metaballs.addBall(toBox(ball.x, metaballs.position.x), toBox(ball.y, metaballs.position.y), toBox(ball.z, metaballs.position.z), ballStrength, ballSubtract, color)
+      const strength = ballStrength * (0.7 + (index % 3) * 0.3)
+      metaballs.addBall(toBox(ball.x, metaballs.position.x), toBox(ball.y, metaballs.position.y), toBox(ball.z, metaballs.position.z), strength, ballSubtract)
       halos[index].position.set(ball.x, ball.y, ball.z)
-      halos[index].material.color.copy(color)
+      halos[index].material.color.setHSL((fieldHue(ball.x, ball.y, seconds) + 0.08) % 1, 0.9, 0.55)
     })
     metaballs.update()
 
@@ -378,7 +394,8 @@ addEventListener('pointerdown', event => {
     return
   }
   if (event.target.closest('a, video, button')) return
-  dragStart = { x: pointer.x, y: pointer.y }})
+  dragStart = { x: pointer.x, y: pointer.y }
+})
 
 addEventListener('pointermove', event => {
   updatePointer(event)
