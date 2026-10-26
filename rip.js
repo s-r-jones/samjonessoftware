@@ -2,16 +2,16 @@ const isTouchDevice = matchMedia('(pointer: coarse)').matches
 const urlSettings = new URLSearchParams(location.search)
 const setting = (name, fallback) => Number(urlSettings.get(name) ?? fallback)
 const columns = setting('columns', isTouchDevice ? 80 : 160)
-const relaxIterations = setting('iterations', 4), ballDepth = setting('depth', -250)
-const burstAfterSeconds = setting('burst', 8), ballStrength = setting('ball', 1.6), ballCount = setting('balls', 12)
-const windStrength = setting('wind', 0.15), pointerGravity = setting('gravity', 4500)
-const gravity = 0.04, damping = 0.98, ballSubtract = 60, ballIsolation = 80, knifeRadius = 22, slashRadius = 30, maskScale = 0.5
+const relaxIterations = setting('iterations', 4), burstAfterSeconds = setting('burst', 8)
+const flowerCount = setting('flowers', isTouchDevice ? 150 : 300), windStrength = setting('wind', 0.15)
+const flowerHexes = ['#f4b3c2', '#e7609e', '#d7003a', '#a59aca', '#5654a2', '#a0d8ef', '#ffffff']
+const gravity = 0.04, damping = 0.98, knifeRadius = 22, slashRadius = 30, maskScale = 0.5, scatterRadius = 120
 const pointer = { x: 0, y: 0, isDown: false }
 const tilt = { x: 0, y: 0 }
 let linkStart, linkEnd, linkRestLength, linkCount = 0
 let dragStart = null, lastCut = null, ripStarted = false, askedForGyro = false
 let viewWidth, viewHeight, rowSpacing, rows, positions, previousPositions, isPinned, isPunctured
-let holeMask, holeTexture, balls, ballRadius, pagePointAt, pageLinks = [], scrolledRows = 0, scrollRemainder = 0
+let holeMask, holeTexture, pagePointAt, pageLinks = [], scrolledRows = 0, scrollRemainder = 0
 
 function updatePointer(event) {
   pointer.x = event.clientX
@@ -124,31 +124,31 @@ function cutAlongDrag() {
   lastCut = { x: pointer.x, y: pointer.y }
 }
 
-function homeOfBall(index, seconds) {
-  const angle = index * 2.4 + Math.sin(seconds * 0.1 + index) * 0.2, distance = Math.sqrt((index + 0.5) / ballCount) * 0.5
-  return { x: viewWidth / 2 + tilt.x + Math.cos(angle) * distance * viewWidth, y: viewHeight / 2 + tilt.y + Math.sin(angle) * distance * viewHeight }
+function plantFlower(flower) {
+  flower.x = viewWidth * (Math.random() * 1.4 - 0.2)
+  flower.y = viewHeight * (Math.random() * 1.4 - 0.2)
+  flower.z = -150 - Math.random() * 450
+  flower.size = 40 + Math.random() * 70
+  flower.spin = Math.random() * Math.PI * 2
+  flower.lifetime = 8 + Math.random() * 8
+  flower.age = 0
+  flower.colorIndex = Math.floor(Math.random() * flowerHexes.length)
 }
 
-const fieldHue = (x, y, seconds) => 0.55 + 0.15 * (1 - Math.cos(seconds * 0.03)) + x / viewWidth * 0.18 + y / viewHeight * 0.08
-
-function moveBalls(seconds) {
-  balls.forEach((ball, index) => {
-    const home = homeOfBall(index, seconds)
-    ball.velocityX += (home.x - ball.x) * 0.0004
-    ball.velocityY += (home.y - ball.y) * 0.0004
-    if (pointer.isDown) {
-      const deltaX = pointer.x - ball.x, deltaY = pointer.y - ball.y
-      const distanceSquared = deltaX * deltaX + deltaY * deltaY + 3000
-      const pull = pointerGravity / (distanceSquared * Math.sqrt(distanceSquared))
-      ball.velocityX += deltaX * pull
-      ball.velocityY += deltaY * pull
-    }
-    ball.velocityX *= 0.95
-    ball.velocityY *= 0.95
-    ball.z = ballDepth - (index % 4) * 60 + Math.sin(seconds * 0.2 + index) * 30
-    ball.x += ball.velocityX
-    ball.y += ball.velocityY
-  })
+function growFlower(flower, secondsPassed, cameraDistance) {
+  flower.age += secondsPassed
+  const fallingFrom = flower.lifetime * 0.7
+  const perspective = cameraDistance / (cameraDistance - flower.z)
+  const screenX = viewWidth / 2 + (flower.x + tilt.x - viewWidth / 2) * perspective
+  const screenY = viewHeight / 2 + (flower.y + tilt.y - viewHeight / 2) * perspective
+  const isTouched = pointer.isDown && Math.hypot(pointer.x - screenX, pointer.y - screenY) < scatterRadius
+  if (isTouched && flower.age < fallingFrom) flower.age = fallingFrom
+  if (flower.age > fallingFrom) {
+    flower.y -= 0.6
+    flower.spin += 0.02
+  }
+  const life = flower.age / flower.lifetime
+  return flower.size * Math.min(life / 0.2, 1, (1 - life) / 0.3)
 }
 
 function nightSky(THREE, radius) {
@@ -180,11 +180,28 @@ function softPuffTexture(THREE) {
   return new THREE.CanvasTexture(canvas)
 }
 
+function flowerTexture(THREE) {
+  const canvas = document.createElement('canvas')
+  canvas.width = canvas.height = 128
+  const context = canvas.getContext('2d')
+  context.translate(64, 64)
+  for (let petal = 0; petal < 5; petal++) {
+    context.rotate(Math.PI * 2 / 5)
+    const glow = context.createRadialGradient(0, -30, 0, 0, -30, 30)
+    glow.addColorStop(0, 'rgba(255,255,255,0.9)')
+    glow.addColorStop(0.7, 'rgba(255,255,255,0.6)')
+    glow.addColorStop(1, 'rgba(255,255,255,0)')
+    context.fillStyle = glow
+    context.beginPath()
+    context.ellipse(0, -30, 18, 30, 0, 0, Math.PI * 2)
+    context.fill()
+  }
+  return new THREE.CanvasTexture(canvas)
+}
+
 async function startRip() {
   ripStarted = true
-  const [THREE, { MarchingCubes }, { default: html2canvas }] = await Promise.all([
-    import('three'), import('three/addons/objects/MarchingCubes.js'), import('html2canvas')
-  ])
+  const [THREE, { default: html2canvas }] = await Promise.all([import('three'), import('html2canvas')])
   // Safari never loads lazy images inside html2canvas's offscreen clone, so the snapshot hangs forever
   document.querySelectorAll('img').forEach(image => image.loading = 'eager')
   document.querySelectorAll('video').forEach(video => video.outerHTML = `<img src="${video.poster}" width="${video.width}">`)
@@ -308,55 +325,28 @@ async function startRip() {
     if (row < rows - 2) linkParticles(i, i + columns * 2)
   }
 
-  // Frosted spheres lit from inside: one color field shared by every sphere, so overlapping spheres never mix into mud
-  const frostedLight = new THREE.ShaderMaterial({
-    uniforms: { seconds: { value: 0 }, viewSize: { value: new THREE.Vector2(width, height) } },
-    vertexShader: `
-      varying vec3 worldPosition, viewNormal, toCamera;
-      void main() {
-        vec4 world = modelMatrix * vec4(position, 1.0);
-        vec4 viewPosition = viewMatrix * world;
-        worldPosition = world.xyz;
-        viewNormal = normalize(normalMatrix * normal);
-        toCamera = -viewPosition.xyz;
-        gl_Position = projectionMatrix * viewPosition;
-      }`,
-    fragmentShader: `
-      uniform float seconds;
-      uniform vec2 viewSize;
-      varying vec3 worldPosition, viewNormal, toCamera;
-      vec3 hsv(float hue, float saturation, float value) {
-        vec3 channel = clamp(abs(mod(hue * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
-        return value * mix(vec3(1.0), channel, saturation);
-      }
-      void main() {
-        float hue = 0.55 + 0.15 * (1.0 - cos(seconds * 0.03)) + worldPosition.x / viewSize.x * 0.18 + worldPosition.y / viewSize.y * 0.08;
-        float facing = max(dot(normalize(viewNormal), normalize(toCamera)), 0.0);
-        vec3 core = hsv(hue, 0.7, 1.0), rim = hsv(hue + 0.04, 1.0, 0.85);
-        gl_FragColor = vec4(mix(rim, core, facing * facing), 1.0);
-      }`
+  const flowerColors = flowerHexes.map(hex => new THREE.Color(hex))
+  const flowerMaterial = new THREE.MeshBasicMaterial({ map: flowerTexture(THREE), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })
+  const flowerField = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), flowerMaterial, flowerCount)
+  const flowers = Array.from({ length: flowerCount }, (_, index) => {
+    const flower = {}
+    plantFlower(flower)
+    flower.age = Math.random() * flower.lifetime
+    flowerField.setColorAt(index, flowerColors[flower.colorIndex])
+    return flower
   })
-  const metaballs = new MarchingCubes(isTouchDevice ? 32 : 64, frostedLight, false, false, 200000)
-  metaballs.isolation = ballIsolation
-  metaballs.position.set(width / 2, height / 2, -100)
-  metaballs.scale.setScalar(Math.max(width, height) / 2)
-  scene.add(metaballs)
-  const toBox = (value, center) => (value - center) / metaballs.scale.x / 2 + 0.5
-  ballRadius = Math.sqrt(ballStrength / (ballSubtract + ballIsolation)) * 2 * metaballs.scale.x
-  balls = Array.from({ length: ballCount }, (_, index) => ({ ...homeOfBall(index, 0), z: ballDepth, velocityX: 0, velocityY: 0 }))
+  const flowerPlacement = new THREE.Object3D()
+  flowerField.frustumCulled = false
+  scene.add(flowerField)
   const slashFrom = { x: width * 0.03, y: height * 0.72 }, slashTo = { x: width * 0.97, y: height * 0.3 }
   let slashDone = 0
-  const halos = balls.map(() => {
-    const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffTexture, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }))
-    halo.scale.setScalar(ballRadius * 3)
-    scene.add(halo)
-    return halo
-  })
 
-  let ripStartSeconds = null
+  let ripStartSeconds = null, previousSeconds = null
   renderer.setAnimationLoop(time => {
     const seconds = time / 1000, tearSeconds = seconds - burstAfterSeconds - 3
     ripStartSeconds ??= seconds
+    const secondsPassed = Math.min(seconds - (previousSeconds ?? seconds), 0.1)
+    previousSeconds = seconds
     const lightShare = 0.5 * Math.min((seconds - ripStartSeconds) / 4, 1)
     clothMaterial.color.setScalar(lightShare)
     clothMaterial.emissiveIntensity = 1 - lightShare
@@ -378,16 +368,20 @@ async function startRip() {
       cutCloth(slashX, slashY, slashRadius, slashDone * 100)
     }
 
-    moveBalls(seconds)
-    metaballs.reset()
-    frostedLight.uniforms.seconds.value = seconds
-    balls.forEach((ball, index) => {
-      const strength = ballStrength * (0.7 + (index % 3) * 0.3)
-      metaballs.addBall(toBox(ball.x, metaballs.position.x), toBox(ball.y, metaballs.position.y), toBox(ball.z, metaballs.position.z), strength, ballSubtract)
-      halos[index].position.set(ball.x, ball.y, ball.z)
-      halos[index].material.color.setHSL((fieldHue(ball.x, ball.y, seconds) + 0.08) % 1, 0.9, 0.55)
+    flowers.forEach((flower, index) => {
+      const size = growFlower(flower, secondsPassed, cameraDistance)
+      if (flower.age > flower.lifetime) {
+        plantFlower(flower)
+        flowerField.setColorAt(index, flowerColors[flower.colorIndex])
+        flowerField.instanceColor.needsUpdate = true
+      }
+      flowerPlacement.position.set(flower.x + tilt.x, flower.y + tilt.y, flower.z)
+      flowerPlacement.rotation.z = flower.spin
+      flowerPlacement.scale.setScalar(Math.max(size, 0.001))
+      flowerPlacement.updateMatrix()
+      flowerField.setMatrixAt(index, flowerPlacement.matrix)
     })
-    metaballs.update()
+    flowerField.instanceMatrix.needsUpdate = true
 
     simulateCloth(seconds)
     geometry.attributes.position.needsUpdate = true
