@@ -4,13 +4,13 @@ const setting = (name, fallback) => Number(urlSettings.get(name) ?? fallback)
 const columns = setting('columns', isTouchDevice ? 80 : 160)
 const relaxIterations = setting('iterations', 4), burstAfterSeconds = setting('burst', 8)
 const flowerCount = setting('flowers', isTouchDevice ? 220 : 500), windStrength = setting('wind', 0.15)
-const gravity = 0.04, damping = 0.98, knifeRadius = 19, slashRadius = 30, maskScale = 0.5, holdToCutMilliseconds = 100
+const gravity = 0.04, damping = 0.98, knifeRadius = 18, slashRadius = 30, maskScale = 0.5, holdToCutMilliseconds = 100
 const pointer = { x: 0, y: 0, isDown: false }
 const tilt = { x: 0, y: 0 }
 let linkStart, linkEnd, linkRestLength, linkCount = 0
 let dragStart = null, lastCut = null, pressStartTime = 0, ripStarted = false, askedForGyro = false
 let viewWidth, viewHeight, rowSpacing, rows, positions, previousPositions, isPinned, isPunctured
-let holeMask, holeTexture, pagePointAt, pageLinks = [], scrolledRows = 0, scrollRemainder = 0
+let holeMask, holeTexture, pagePointAt, pageLinks = [], scrolledRows = 0
 
 function updatePointer(event) {
   pointer.x = event.clientX
@@ -47,7 +47,6 @@ function resetParticle(i) {
 function followScroll() {
   const shift = Math.round(scrollY / rowSpacing) - scrolledRows
   scrolledRows += shift
-  scrollRemainder = scrollY - scrolledRows * rowSpacing
   if (shift === 0) return
   for (const values of [positions, previousPositions]) {
     if (shift > 0) values.copyWithin(0, shift * columns * 3)
@@ -98,8 +97,7 @@ function simulateCloth(seconds) {
 }
 
 function cutCloth(x, y, radius, seed) {
-  const clothY = y - scrollRemainder
-  const pageY = scrolledRows * rowSpacing + viewHeight - clothY
+  const pageY = scrollY + viewHeight - y
   holeMask.beginPath()
   for (let angle = 0; angle < Math.PI * 2; angle += Math.min(0.2, 3 / radius)) {
     const raggedRadius = radius * (1 + 0.08 * Math.sin(angle * 3 + seed) + 0.04 * Math.sin(angle * 11 + seed * 3)) + 5 * Math.sin(angle * 37 + seed) + 3 * Math.sin(angle * 83)
@@ -111,7 +109,7 @@ function cutCloth(x, y, radius, seed) {
   const releaseRadius = radius * 0.8 - 1.5 * viewWidth / (columns - 1)
   for (let i = 0; i < columns * rows; i++) {
     const restX = (i % columns) * viewWidth / (columns - 1), restY = viewHeight - Math.floor(i / columns) * rowSpacing
-    if ((restX - x) ** 2 + (restY - clothY) ** 2 < releaseRadius ** 2) isPunctured[i] = 1
+    if ((restX - x) ** 2 + (restY - y) ** 2 < releaseRadius ** 2) isPunctured[i] = 1
   }
 }
 
@@ -216,7 +214,7 @@ async function startRip() {
     raycaster.setFromCamera(new THREE.Vector2(clientX / width * 2 - 1, 1 - clientY / height * 2), camera)
     const hit = raycaster.intersectObject(clothMesh)[0]
     if (!hit) return null
-    const pageX = hit.uv.x * width, pageY = scrolledRows * rowSpacing + (1 - hit.uv.y) * height
+    const pageX = hit.uv.x * width, pageY = scrollY + (1 - hit.uv.y) * height
     const isHole = holeMask.getImageData(pageX * maskScale, pageY * maskScale, 1, 1).data[0] < 128
     return isHole ? null : { x: pageX, y: pageY }
   }
@@ -250,8 +248,8 @@ async function startRip() {
     clothMaterial.color.setScalar(lightShare)
     clothMaterial.emissiveIntensity = 1 - lightShare
     followScroll()
-    clothMesh.position.y = scrollRemainder
-    for (const pageTexture of [texture, holeTexture]) pageTexture.offset.y = 1 - (scrolledRows * rowSpacing + height) / pageHeight
+    // The cloth stays locked to the screen and only the page printed on it scrolls, so its edges never leave the viewport
+    for (const pageTexture of [texture, holeTexture]) pageTexture.offset.y = 1 - (scrollY + height) / pageHeight
     // Starting the clock at the longest flower lifetime means every flower already on screen was born in spring
     flowers.uniforms.time.value = seconds - ripStartSeconds + 50
     flowers.field.position.set(tilt.x, tilt.y, 0)
