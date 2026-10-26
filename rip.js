@@ -4,14 +4,15 @@ const setting = (name, fallback) => Number(urlSettings.get(name) ?? fallback)
 const columns = setting('columns', isTouchDevice ? 80 : 160)
 const relaxIterations = setting('iterations', 4), ballDepth = setting('depth', -250)
 const burstAfterSeconds = setting('burst', 30), ballStrength = setting('ball', 0.45)
-const windStrength = setting('wind', 0.15), ballGravity = setting('gravity', 1500)
+const windStrength = setting('wind', 0.15), pointerGravity = setting('gravity', 4500)
+const lampHexes = ['#a0d8ef', '#a59aca', '#e7609e', '#f4b3c2', '#f8b500']
 const gravity = 0.04, damping = 0.98, ballSubtract = 30, ballIsolation = 80, knifeRadius = 22, maskScale = 0.5
 const pointer = { x: 0, y: 0, isDown: false }
 const tilt = { x: 0, y: 0 }
 let linkStart, linkEnd, linkRestLength, linkCount = 0
 let dragStart = null, lastCut = null, ripStarted = false, askedForGyro = false
 let viewWidth, viewHeight, rowSpacing, rows, positions, previousPositions, isPinned, isPunctured
-let holeMask, holeTexture, balls, ballRadius, pageLinks = [], scrolledRows = 0, scrollRemainder = 0
+let holeMask, holeTexture, balls, ballRadius, lampColors, pageLinks = [], scrolledRows = 0, scrollRemainder = 0
 
 function updatePointer(event) {
   pointer.x = event.clientX
@@ -124,23 +125,28 @@ function cutAlongDrag() {
   lastCut = { x: pointer.x, y: pointer.y }
 }
 
-function gravityPull(from, to, strength, restDistance) {
-  const deltaX = to.x - from.x, deltaY = to.y - from.y
-  const distanceSquared = deltaX * deltaX + deltaY * deltaY + 3000
-  const pull = strength * (1 - restDistance ** 2 / distanceSquared) / (distanceSquared * Math.sqrt(distanceSquared))
-  return [deltaX * pull, deltaY * pull]
+function homeOfBall(index, seconds) {
+  const angle = index * Math.PI * 2 / 5 + Math.sin(seconds * 0.1 + index) * 0.3
+  return { x: viewWidth / 2 + tilt.x + Math.cos(angle) * viewWidth * 0.28, y: viewHeight / 2 + tilt.y + Math.sin(angle) * viewHeight * 0.28 }
+}
+
+function lampColor(phase) {
+  const position = Math.abs((phase * 2) % 2 - 1) * (lampColors.length - 1)
+  const lower = Math.min(Math.floor(position), lampColors.length - 2)
+  return lampColors[lower].clone().lerpHSL(lampColors[lower + 1], position - lower)
 }
 
 function moveBalls(seconds) {
   balls.forEach((ball, index) => {
-    const homeX = viewWidth / 2 + tilt.x + Math.sin(seconds * 0.15 + index * 1.3) * viewWidth * 0.2
-    const homeY = viewHeight / 2 + tilt.y + Math.cos(seconds * 0.11 + index * 2.1) * viewHeight * 0.15
-    const pulls = [[(homeX - ball.x) * 0.0004, (homeY - ball.y) * 0.0004]]
-    for (const other of balls) if (other !== ball) pulls.push(gravityPull(ball, other, ballGravity, ballRadius * 1.6))
-    if (pointer.isDown) pulls.push(gravityPull(ball, pointer, ballGravity * 3, 0))
-    for (const [pullX, pullY] of pulls) {
-      ball.velocityX += pullX
-      ball.velocityY += pullY
+    const home = homeOfBall(index, seconds)
+    ball.velocityX += (home.x - ball.x) * 0.0004
+    ball.velocityY += (home.y - ball.y) * 0.0004
+    if (pointer.isDown) {
+      const deltaX = pointer.x - ball.x, deltaY = pointer.y - ball.y
+      const distanceSquared = deltaX * deltaX + deltaY * deltaY + 3000
+      const pull = pointerGravity / (distanceSquared * Math.sqrt(distanceSquared))
+      ball.velocityX += deltaX * pull
+      ball.velocityY += deltaY * pull
     }
     ball.velocityX *= 0.95
     ball.velocityY *= 0.95
@@ -150,10 +156,10 @@ function moveBalls(seconds) {
   })
 }
 
-function sunsetSky(THREE, radius) {
+function nightSky(THREE, radius) {
   const geometry = new THREE.SphereGeometry(radius, 32, 16)
-  const stops = ['#f6e4ee', '#e6b8d8', '#ab9de2', '#5f6fc4', '#1c2350'].map(hex => new THREE.Color(hex))
-  const desertColor = new THREE.Color('#6a5a8c')
+  const stops = ['#2a1838', '#1a1233', '#0e0c24', '#070716', '#030309'].map(hex => new THREE.Color(hex))
+  const desertColor = new THREE.Color('#050409')
   const colors = []
   for (let i = 0; i < geometry.attributes.position.count; i++) {
     const verticalPosition = geometry.attributes.position.getY(i) / radius
@@ -212,8 +218,8 @@ async function startRip() {
   camera.position.set(width / 2, height / 2, cameraDistance)
   camera.lookAt(width / 2, height / 2, 0)
   const scene = new THREE.Scene()
-  scene.fog = new THREE.Fog('#eedcec', cameraDistance + 800, cameraDistance + 7000)
-  const sky = sunsetSky(THREE, 8000)
+  scene.fog = new THREE.Fog('#1a1030', cameraDistance + 800, cameraDistance + 7000)
+  const sky = nightSky(THREE, 8000)
   sky.position.copy(camera.position)
   const keyLight = new THREE.DirectionalLight('#fff6f2', 2.45)
   keyLight.position.set(width * 0.1, height * 1.2, cameraDistance)
@@ -230,21 +236,17 @@ async function startRip() {
     dunes.attributes.position.setY(i, Math.sin(x * 0.0012) * Math.cos(z * 0.0009) * 120 + Math.sin(x * 0.0031 + z * 0.002) * 40)
   }
   dunes.computeVertexNormals()
-  const desert = new THREE.Mesh(dunes, new THREE.MeshLambertMaterial({ color: '#7d6a9a' }))
+  const desert = new THREE.Mesh(dunes, new THREE.MeshLambertMaterial({ color: '#0b0914' }))
   desert.position.set(width / 2, -height * 0.6, 0)
   scene.add(sky, keyLight, keyLight.target, new THREE.AmbientLight('#ffffff', 1.2), desert)
 
   const puffTexture = softPuffTexture(THREE)
-  const sun = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffTexture, color: '#fff8e8', fog: false, depthWrite: false }))
-  sun.position.set(width / 2 + 1500, height * 0.2, -7000)
-  sun.scale.setScalar(2500)
-  scene.add(sun)
   const cloudPuffs = []
   for (let cloud = 0; cloud < 25; cloud++) {
     const cloudX = width / 2 + (Math.random() - 0.5) * 14000, cloudY = height * (0.5 + Math.random() * 2.5), cloudZ = -1500 - Math.random() * 5500
-    const tint = ['#ffffff', '#f1e2f7', '#e2e6ff'][cloud % 3]
+    const tint = ['#3b2350', '#22305c', '#4a2a4a'][cloud % 3]
     for (let puff = 0; puff < 6; puff++) {
-      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffTexture, color: tint, transparent: true, opacity: 0.55, depthWrite: false }))
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffTexture, color: tint, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }))
       sprite.position.set(cloudX + (Math.random() - 0.5) * 900, cloudY + (Math.random() - 0.5) * 200, cloudZ + (Math.random() - 0.5) * 300)
       sprite.scale.setScalar(500 + Math.random() * 700)
       cloudPuffs.push(sprite)
@@ -271,24 +273,25 @@ async function startRip() {
   const pageForReflections = new THREE.Mesh(new THREE.PlaneGeometry(80, 80 * height / width), new THREE.MeshBasicMaterial({ map: reflectedPage }))
   pageForReflections.position.z = 30
   pageForReflections.rotation.y = Math.PI
-  const sunForReflections = new THREE.Mesh(new THREE.SphereGeometry(5), new THREE.MeshBasicMaterial({ color: '#fff4d6' }))
-  sunForReflections.position.set(15, 4, -40)
-  const reflectedWorld = new THREE.Scene().add(sunsetSky(THREE, 50), sunForReflections, pageForReflections)
+  const reflectedWorld = new THREE.Scene().add(nightSky(THREE, 50), pageForReflections)
   scene.environment = new THREE.PMREMGenerator(renderer).fromScene(reflectedWorld).texture
 
-  const moteCount = 300
-  const motePositions = new Float32Array(moteCount * 3)
+  lampColors = lampHexes.map(hex => new THREE.Color(hex))
+  const moteCount = 500
+  const motePositions = new Float32Array(moteCount * 3), moteColors = new Float32Array(moteCount * 3)
   for (let mote = 0; mote < moteCount; mote++) {
     motePositions.set([width / 2 + (Math.random() - 0.5) * 4000, (Math.random() * 2.3 - 0.3) * height, -300 - Math.random() * 3000], mote * 3)
+    lampColors[mote % lampColors.length].toArray(moteColors, mote * 3)
   }
   const moteGeometry = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(motePositions, 3))
-  const moteMaterial = new THREE.PointsMaterial({ map: puffTexture, color: '#fdf6ff', size: 40, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false })
+  moteGeometry.setAttribute('color', new THREE.BufferAttribute(moteColors, 3))
+  const moteMaterial = new THREE.PointsMaterial({ map: puffTexture, vertexColors: true, size: 30, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })
   scene.add(new THREE.Points(moteGeometry, moteMaterial))
 
   rows = Math.round(columns * height / width)
   rowSpacing = height / (rows - 1)
   const geometry = new THREE.PlaneGeometry(width, height, columns - 1, rows - 1).translate(width / 2, height / 2, 0)
-  const clothMaterial = new THREE.MeshLambertMaterial({ map: texture, alphaMap: holeTexture, alphaTest: 0.5, side: THREE.DoubleSide })
+  const clothMaterial = new THREE.MeshLambertMaterial({ map: texture, emissiveMap: texture, emissive: '#ffffff', alphaMap: holeTexture, alphaTest: 0.5, side: THREE.DoubleSide })
   const clothMesh = new THREE.Mesh(geometry, clothMaterial)
   clothMesh.castShadow = clothMesh.receiveShadow = true
   scene.add(clothMesh)
@@ -311,8 +314,11 @@ async function startRip() {
     if (row < rows - 2) linkParticles(i, i + columns * 2)
   }
 
-  const chrome = new THREE.MeshPhysicalMaterial({ color: '#fff4f8', metalness: 1, roughness: 0.1, clearcoat: 1, iridescence: 0.2 })
-  const metaballs = new MarchingCubes(isTouchDevice ? 32 : 64, chrome, false, false, 200000)
+  const glass = new THREE.MeshPhysicalMaterial({ vertexColors: true, color: '#222222', roughness: 0.25, clearcoat: 0.3, clearcoatRoughness: 0.05, emissive: '#ffffff', emissiveIntensity: 1.6 })
+  glass.onBeforeCompile = shader => {
+    shader.fragmentShader = shader.fragmentShader.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance *= vColor.rgb;')
+  }
+  const metaballs = new MarchingCubes(isTouchDevice ? 32 : 64, glass, false, true, 200000)
   metaballs.isolation = ballIsolation
   metaballs.position.set(width / 2, height / 2, -100)
   metaballs.scale.setScalar(Math.max(width, height) / 2)
@@ -320,13 +326,21 @@ async function startRip() {
   scene.add(metaballs)
   const toBox = (value, center) => (value - center) / metaballs.scale.x / 2 + 0.5
   ballRadius = Math.sqrt(ballStrength / (ballSubtract + ballIsolation)) * 2 * metaballs.scale.x * 1.2
-  balls = Array.from({ length: 5 }, (_, index) => {
-    const angle = index * Math.PI * 2 / 5, ringRadius = Math.min(width, height) * 0.2
-    return { x: width / 2 + Math.cos(angle) * ringRadius, y: height / 2 + Math.sin(angle) * ringRadius, z: ballDepth, velocityX: 0, velocityY: 0 }
+  balls = Array.from({ length: 5 }, (_, index) => ({ ...homeOfBall(index, 0), z: ballDepth, velocityX: 0, velocityY: 0 }))
+  const halos = balls.map(() => {
+    const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffTexture, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }))
+    halo.scale.setScalar(ballRadius * 4)
+    scene.add(halo)
+    return halo
   })
 
+  let ripStartSeconds = null
   renderer.setAnimationLoop(time => {
     const seconds = time / 1000, tearSeconds = seconds - burstAfterSeconds - 3
+    ripStartSeconds ??= seconds
+    const lightShare = 0.5 * Math.min((seconds - ripStartSeconds) / 4, 1)
+    clothMaterial.color.setScalar(lightShare)
+    clothMaterial.emissiveIntensity = 1 - lightShare
     followScroll()
     clothMesh.position.y = scrollRemainder
     for (const pageTexture of [texture, holeTexture]) pageTexture.offset.y = 1 - (scrolledRows * rowSpacing + height) / pageHeight
@@ -341,9 +355,12 @@ async function startRip() {
 
     moveBalls(seconds)
     metaballs.reset()
-    for (const ball of balls) {
-      metaballs.addBall(toBox(ball.x, metaballs.position.x), toBox(ball.y, metaballs.position.y), toBox(ball.z, metaballs.position.z), ballStrength, ballSubtract)
-    }
+    balls.forEach((ball, index) => {
+      const color = lampColor(seconds * 0.03 + index / balls.length)
+      metaballs.addBall(toBox(ball.x, metaballs.position.x), toBox(ball.y, metaballs.position.y), toBox(ball.z, metaballs.position.z), ballStrength, ballSubtract, color)
+      halos[index].position.set(ball.x, ball.y, ball.z)
+      halos[index].material.color.copy(color)
+    })
     metaballs.update()
 
     simulateCloth(seconds)
@@ -361,9 +378,7 @@ addEventListener('pointerdown', event => {
     return
   }
   if (event.target.closest('a, video, button')) return
-  dragStart = { x: pointer.x, y: pointer.y }
-  if (event.pointerType !== 'mouse' && event.target.closest('#peel')) startRip()
-})
+  dragStart = { x: pointer.x, y: pointer.y }})
 
 addEventListener('pointermove', event => {
   updatePointer(event)
