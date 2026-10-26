@@ -3,7 +3,7 @@ const urlSettings = new URLSearchParams(location.search)
 const setting = (name, fallback) => Number(urlSettings.get(name) ?? fallback)
 const columns = setting('columns', isTouchDevice ? 80 : 160)
 const relaxIterations = setting('iterations', 4), ballDepth = setting('depth', -250)
-const burstAfterSeconds = setting('burst', 10), ballStrength = setting('ball', 1.6), ballCount = setting('balls', 12)
+const burstAfterSeconds = setting('burst', 8), ballStrength = setting('ball', 1.6), ballCount = setting('balls', 12)
 const windStrength = setting('wind', 0.15), pointerGravity = setting('gravity', 4500)
 const gravity = 0.04, damping = 0.98, ballSubtract = 60, ballIsolation = 80, knifeRadius = 22, slashRadius = 30, maskScale = 0.5
 const pointer = { x: 0, y: 0, isDown: false }
