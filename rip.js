@@ -1,12 +1,13 @@
-const columns = 100, rows = 66
-const relaxIterations = 12, gravity = 0.2, damping = 0.99, tearRatio = 2.5
-const ballStrength = 1, ballSubtract = 12, burstAfterSeconds = 5
+const isTouchDevice = matchMedia('(pointer: coarse)').matches
+const columns = isTouchDevice ? 80 : 128
+const relaxIterations = 8, gravity = 0.04, damping = 0.98, tearRatio = 1.35
+const ballStrength = 1, ballSubtract = 12, ballIsolation = 80, burstAfterSeconds = 5
 const pointer = { x: 0, y: 0, isDown: false }
 const tilt = { x: 0, y: 0 }
 const constraints = [], rightLinks = [], downLinks = []
 let dragStart = null, ripStarted = false, askedForGyro = false
-let positions, previousPositions, isPinned, grabbedIndex = -1
-let leaderPoint = [0.5, 0.5, 0.5]
+let rows, positions, previousPositions, isPinned, isPunctured, grabbedIndex = -1
+let leader = { x: innerWidth / 2, y: innerHeight / 2 }
 
 function updatePointer(event) {
   pointer.x = event.clientX
@@ -42,50 +43,44 @@ function linkParticles(a, b) {
 function simulateCloth() {
   for (let i = 0; i < columns * rows; i++) {
     if (isPinned[i]) continue
-    const x = i * 3, y = i * 3 + 1
-    const velocityX = (positions[x] - previousPositions[x]) * damping
-    const velocityY = (positions[y] - previousPositions[y]) * damping - gravity
-    previousPositions.set([positions[x], positions[y]], x)
-    positions.set([positions[x] + velocityX, positions[y] + velocityY], x)
+    for (let axis = 0; axis < 3; axis++) {
+      const index = i * 3 + axis
+      const velocity = (positions[index] - previousPositions[index]) * damping
+      previousPositions[index] = positions[index]
+      positions[index] += velocity
+    }
+    positions[i * 3 + 1] -= gravity
   }
-  if (grabbedIndex >= 0) positions.set([pointer.x, pointer.y], grabbedIndex * 3)
+  if (grabbedIndex >= 0) positions.set([pointer.x, pointer.y, 0], grabbedIndex * 3)
   for (let iteration = 0; iteration < relaxIterations; iteration++) {
     for (const link of constraints) {
       if (link.isBroken) continue
-      const ax = link.a * 3, bx = link.b * 3
-      const deltaX = positions[bx] - positions[ax], deltaY = positions[bx + 1] - positions[ax + 1]
-      const distance = Math.hypot(deltaX, deltaY)
+      if (isPunctured[link.a] || isPunctured[link.b]) { link.isBroken = true; continue }
+      const a = link.a * 3, b = link.b * 3
+      const deltaX = positions[b] - positions[a], deltaY = positions[b + 1] - positions[a + 1], deltaZ = positions[b + 2] - positions[a + 2]
+      const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ)
       if (distance > link.restLength * tearRatio) { link.isBroken = true; continue }
       const weightA = 1 - isPinned[link.a], weightB = 1 - isPinned[link.b]
       const correction = (distance - link.restLength) / distance / (weightA + weightB || 1)
-      positions[ax] += deltaX * correction * weightA
-      positions[ax + 1] += deltaY * correction * weightA
-      positions[bx] -= deltaX * correction * weightB
-      positions[bx + 1] -= deltaY * correction * weightB
+      positions[a] += deltaX * correction * weightA
+      positions[a + 1] += deltaY * correction * weightA
+      positions[a + 2] += deltaZ * correction * weightA
+      positions[b] -= deltaX * correction * weightB
+      positions[b + 1] -= deltaY * correction * weightB
+      positions[b + 2] -= deltaZ * correction * weightB
     }
   }
 }
 
-function bubbleCloth(centerX, centerY, bubbleSeconds) {
-  if (bubbleSeconds < 0) return
-  const bubbleRadius = 30 + bubbleSeconds * 15
-  const push = Math.sin(bubbleSeconds * 9) * 1.5 + bubbleSeconds * 0.4
+function pushClothOutOfBall(ball, radius) {
   for (let i = 0; i < columns * rows; i++) {
     if (isPinned[i]) continue
-    const deltaX = positions[i * 3] - centerX, deltaY = positions[i * 3 + 1] - centerY
-    const distance = Math.hypot(deltaX, deltaY)
-    if (distance === 0 || distance > bubbleRadius) continue
-    const falloff = 1 - distance / bubbleRadius
-    positions[i * 3] += deltaX / distance * push * falloff
-    positions[i * 3 + 1] += deltaY / distance * push * falloff
-  }
-  const ripRadius = Math.min((bubbleSeconds - 2) * 12, 220)
-  if (ripRadius <= 0) return
-  for (const link of constraints) {
-    const middleX = (positions[link.a * 3] + positions[link.b * 3]) / 2 - centerX
-    const middleY = (positions[link.a * 3 + 1] + positions[link.b * 3 + 1]) / 2 - centerY
-    const raggedRadius = ripRadius * (0.75 + 0.25 * Math.sin(Math.atan2(middleY, middleX) * 7))
-    if (Math.hypot(middleX, middleY) < raggedRadius) link.isBroken = true
+    const deltaX = positions[i * 3] - ball.x, deltaY = positions[i * 3 + 1] - ball.y, deltaZ = positions[i * 3 + 2] - ball.z
+    const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ)
+    if (distance === 0 || distance >= radius) continue
+    const pushOut = radius / distance
+    positions.set([ball.x + deltaX * pushOut, ball.y + deltaY * pushOut, ball.z + deltaZ * pushOut], i * 3)
+    if (positions[i * 3 + 2] > radius * 0.35) isPunctured[i] = 1
   }
 }
 
@@ -101,17 +96,22 @@ function visibleQuadIndices() {
   return quadIndices
 }
 
-function moveMetaballs(metaballs, seconds) {
-  const tapPoint = [0.5 + 0.3 * (pointer.x / innerWidth * 2 - 1), 0.5 + 0.3 * (pointer.y / innerHeight * 2 - 1), 0.5]
-  const leaderTarget = pointer.isDown ? tapPoint : [0.5, 0.5, 0.5]
-  leaderPoint = leaderPoint.map((value, axis) => value + (leaderTarget[axis] - value) * 0.08)
-  metaballs.reset()
-  metaballs.addBall(...leaderPoint, ballStrength * 1.5, ballSubtract)
+function placeBalls(seconds, burstSeconds, width, height) {
+  const approachZ = Math.min(-500 + Math.max(burstSeconds, 0) * 70, 0)
+  const target = pointer.isDown ? pointer : { x: width / 2, y: height / 2 }
+  leader.x += (target.x - leader.x) * 0.08
+  leader.y += (target.y - leader.y) * 0.08
+  const balls = [{ x: leader.x, y: leader.y, z: approachZ + 40, strength: ballStrength * 1.5 }]
   for (let ball = 1; ball < 7; ball++) {
     const angle = seconds * (0.4 + ball * 0.07) + ball * 0.9
-    metaballs.addBall(0.5 + 0.3 * Math.cos(angle), 0.5 + 0.3 * Math.sin(angle * 1.3), 0.5 + 0.3 * Math.sin(angle * 0.7), ballStrength, ballSubtract)
+    balls.push({
+      x: width / 2 + Math.cos(angle) * width * 0.14,
+      y: height / 2 + Math.sin(angle * 1.3) * height * 0.12,
+      z: approachZ + Math.sin(seconds * 2.5 + ball * 1.7) * 60,
+      strength: ballStrength
+    })
   }
-  metaballs.update()
+  return balls
 }
 
 async function startRip() {
@@ -129,69 +129,87 @@ async function startRip() {
   const renderer = new THREE.WebGLRenderer({ antialias: true })
   renderer.setPixelRatio(pixelRatio)
   renderer.setSize(width, height)
-  renderer.autoClear = false
+  renderer.shadowMap.enabled = true
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap
   renderer.domElement.style.cssText += 'position:fixed;top:0;left:0;z-index:9999;touch-action:none;visibility:visible'
   document.body.append(renderer.domElement)
   document.body.style.visibility = 'hidden'
 
-  const world = new THREE.Scene()
-  world.background = new THREE.Color('#14051f')
-  world.fog = new THREE.Fog('#14051f', 700, 2600)
-  world.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment()).texture
-  const pinkLight = new THREE.DirectionalLight('#ff3fd2', 3)
-  pinkLight.position.set(-1, 1, 1)
-  const cyanLight = new THREE.DirectionalLight('#3ff5ff', 2)
-  cyanLight.position.set(1, -0.5, 1)
-  const floorGrid = new THREE.GridHelper(6000, 60, '#ff3fd2', '#6b2fa8')
-  floorGrid.position.y = -350
-  world.add(pinkLight, cyanLight, floorGrid)
-  const worldCamera = new THREE.PerspectiveCamera(50, width / height, 1, 6000)
+  const fieldOfView = 50
+  const cameraDistance = height / 2 / Math.tan(THREE.MathUtils.degToRad(fieldOfView / 2))
+  const camera = new THREE.PerspectiveCamera(fieldOfView, width / height, 1, cameraDistance + 8000)
+  const scene = new THREE.Scene()
+  scene.background = new THREE.Color('#14051f')
+  scene.fog = new THREE.Fog('#14051f', cameraDistance + 500, cameraDistance + 6000)
+  scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment()).texture
 
-  const resolution = matchMedia('(pointer: coarse)').matches ? 28 : 48
-  const chrome = new THREE.MeshPhysicalMaterial({ color: '#b48cff', metalness: 0.6, roughness: 0.15, clearcoat: 1, iridescence: 1 })
-  const metaballs = new MarchingCubes(resolution, chrome, false, false, 100000)
-  metaballs.scale.setScalar(400)
-  world.add(metaballs)
+  const keyLight = new THREE.DirectionalLight('#ffffff', 2.45)
+  keyLight.position.set(width * 0.1, height * 1.2, cameraDistance)
+  keyLight.target.position.set(width / 2, height / 2, 0)
+  keyLight.castShadow = true
+  keyLight.shadow.mapSize.set(2048, 2048)
+  Object.assign(keyLight.shadow.camera, { left: -width, right: width, top: height, bottom: -height, far: cameraDistance * 4 })
+  keyLight.shadow.bias = -0.0005
+  keyLight.shadow.normalBias = 1.5
+  const floorGrid = new THREE.GridHelper(20000, 100, '#ff3fd2', '#6b2fa8')
+  floorGrid.position.set(width / 2, -height * 0.4, 0)
+  scene.add(keyLight, keyLight.target, new THREE.AmbientLight('#ffffff', 1.2), floorGrid)
 
-  const cloth = new THREE.Scene()
-  const clothCamera = new THREE.OrthographicCamera(0, width, height, 0, -1, 1)
   const texture = new THREE.CanvasTexture(snapshot)
   texture.colorSpace = THREE.SRGBColorSpace
+  rows = Math.round(columns * height / width)
   const geometry = new THREE.PlaneGeometry(width, height, columns - 1, rows - 1).translate(width / 2, height / 2, 0)
-  geometry.setIndex(new THREE.BufferAttribute(new Uint16Array((columns - 1) * (rows - 1) * 6), 1))
-  cloth.add(new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide })))
+  geometry.setIndex(new THREE.BufferAttribute(new Uint32Array((columns - 1) * (rows - 1) * 6), 1))
+  const clothMesh = new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({ map: texture, side: THREE.DoubleSide }))
+  clothMesh.castShadow = clothMesh.receiveShadow = true
+  scene.add(clothMesh)
 
   positions = geometry.attributes.position.array
   previousPositions = positions.slice()
-  isPinned = new Uint8Array(columns * rows).fill(1, 0, columns)
+  isPinned = new Uint8Array(columns * rows)
+  isPunctured = new Uint8Array(columns * rows)
   for (let i = 0; i < columns * rows; i++) {
-    if (i % columns < columns - 1) rightLinks[i] = linkParticles(i, i + 1)
-    if (i < columns * (rows - 1)) downLinks[i] = linkParticles(i, i + columns)
+    const column = i % columns, row = Math.floor(i / columns)
+    if (row === 0 || row === rows - 1 || column === 0 || column === columns - 1) isPinned[i] = 1
+    if (column < columns - 1) rightLinks[i] = linkParticles(i, i + 1)
+    if (row < rows - 1) downLinks[i] = linkParticles(i, i + columns)
+    if (column < columns - 2) linkParticles(i, i + 2)
+    if (row < rows - 2) linkParticles(i, i + columns * 2)
   }
   if (pointer.isDown) grabNearestParticle()
 
+  const chrome = new THREE.MeshPhysicalMaterial({ color: '#b48cff', metalness: 0.6, roughness: 0.15, clearcoat: 1, iridescence: 1 })
+  const metaballs = new MarchingCubes(isTouchDevice ? 32 : 64, chrome, false, false, 200000)
+  metaballs.isolation = ballIsolation
+  metaballs.position.set(width / 2, height / 2, -100)
+  metaballs.scale.setScalar(Math.max(width, height) / 2)
+  metaballs.castShadow = true
+  scene.add(metaballs)
+  const toBox = (value, center) => (value - center) / metaballs.scale.x / 2 + 0.5
+  const ballRadius = strength => Math.sqrt(strength / (ballSubtract + ballIsolation)) * 2 * metaballs.scale.x * 1.4
+
   renderer.setAnimationLoop(time => {
-    const burstSeconds = time / 1000 - burstAfterSeconds
-    bubbleCloth(width / 2, height / 2, burstSeconds)
-    bubbleCloth(width * 0.42, height * 0.58, burstSeconds - 1.5)
-    bubbleCloth(width * 0.57, height * 0.44, burstSeconds - 3)
+    const seconds = time / 1000, burstSeconds = seconds - burstAfterSeconds
+    const balls = placeBalls(seconds, burstSeconds, width, height)
+    metaballs.reset()
+    for (const ball of balls) {
+      metaballs.addBall(toBox(ball.x, metaballs.position.x), toBox(ball.y, metaballs.position.y), toBox(ball.z, metaballs.position.z), ball.strength, ballSubtract)
+      pushClothOutOfBall(ball, ballRadius(ball.strength))
+    }
+    metaballs.update()
+
     simulateCloth()
     const quadIndices = visibleQuadIndices()
     geometry.index.array.set(quadIndices)
     geometry.index.needsUpdate = true
     geometry.setDrawRange(0, quadIndices.length)
     geometry.attributes.position.needsUpdate = true
+    geometry.computeVertexNormals()
 
-    moveMetaballs(metaballs, time / 1000)
-    worldCamera.position.x += (tilt.x - worldCamera.position.x) * 0.05
-    worldCamera.position.y += (150 + tilt.y - worldCamera.position.y) * 0.05
-    worldCamera.position.z = 1000
-    worldCamera.lookAt(0, 0, 0)
-
-    renderer.clear()
-    renderer.render(world, worldCamera)
-    renderer.clearDepth()
-    renderer.render(cloth, clothCamera)
+    const parallax = THREE.MathUtils.clamp((burstSeconds - 6) / 4, 0, 1)
+    camera.position.set(width / 2 + tilt.x * parallax, height / 2 + tilt.y * parallax, cameraDistance)
+    camera.lookAt(width / 2, height / 2, 0)
+    renderer.render(scene, camera)
   })
 }
 
