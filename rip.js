@@ -2,7 +2,7 @@ const isTouchDevice = matchMedia('(pointer: coarse)').matches
 const urlSettings = new URLSearchParams(location.search)
 const setting = (name, fallback) => Number(urlSettings.get(name) ?? fallback)
 const columns = setting('columns', isTouchDevice ? 80 : 160)
-const relaxIterations = setting('iterations', 4), punctureDepth = setting('puncture', 0.5)
+const relaxIterations = setting('iterations', 4), ballDepth = setting('depth', -250)
 const burstAfterSeconds = setting('burst', 30), ballStrength = setting('ball', 0.45)
 const windStrength = setting('wind', 0.15), ballGravity = setting('gravity', 1500)
 const gravity = 0.04, damping = 0.98, ballSubtract = 30, ballIsolation = 80, knifeRadius = 22, maskScale = 0.5
@@ -66,7 +66,7 @@ function followScroll() {
 }
 
 function simulateCloth(seconds) {
-  const gust = windStrength * (0.6 + 0.4 * Math.sin(seconds * 0.7))
+  const gust = windStrength * (0.6 + 0.4 * Math.sin(seconds * 0.3))
   for (let i = 0; i < columns * rows; i++) {
     if (isPinned[i] || isPunctured[i]) continue
     for (let axis = 0; axis < 3; axis++) {
@@ -77,7 +77,7 @@ function simulateCloth(seconds) {
     }
     const x = positions[i * 3], y = positions[i * 3 + 1]
     positions[i * 3 + 1] -= gravity
-    positions[i * 3 + 2] += gust * (Math.sin(x * 0.012 + seconds * 1.9) * Math.sin(y * 0.009 + seconds * 1.3) + 0.5 * Math.sin((x + y) * 0.006 - seconds * 2.3))
+    positions[i * 3 + 2] += gust * (Math.sin(x * 0.012 + seconds * 0.8) * Math.sin(y * 0.009 + seconds * 0.6) + 0.5 * Math.sin((x + y) * 0.006 - seconds * 1.0))
   }
   for (let iteration = 0; iteration < relaxIterations; iteration++) {
     for (let link = 0; link < linkCount; link++) {
@@ -102,8 +102,8 @@ function cutCloth(x, y, radius, seed) {
   const clothY = y - scrollRemainder
   const pageY = scrolledRows * rowSpacing + viewHeight - clothY
   holeMask.beginPath()
-  for (let angle = 0; angle < Math.PI * 2; angle += 0.2) {
-    const raggedRadius = radius * (1 + 0.12 * Math.sin(angle * 5 + seed) + 0.06 * Math.sin(angle * 13 + seed * 3))
+  for (let angle = 0; angle < Math.PI * 2; angle += Math.min(0.2, 3 / radius)) {
+    const raggedRadius = radius * (1 + 0.08 * Math.sin(angle * 3 + seed) + 0.04 * Math.sin(angle * 11 + seed * 3)) + 5 * Math.sin(angle * 37 + seed) + 3 * Math.sin(angle * 83)
     holeMask.lineTo((x + Math.cos(angle) * raggedRadius) * maskScale, (pageY - Math.sin(angle) * raggedRadius) * maskScale)
   }
   holeMask.fill()
@@ -131,21 +131,20 @@ function gravityPull(from, to, strength, restDistance) {
   return [deltaX * pull, deltaY * pull]
 }
 
-function moveBalls(seconds, burstSeconds) {
-  const home = { x: viewWidth / 2 + tilt.x, y: viewHeight / 2 + tilt.y }
+function moveBalls(seconds) {
   balls.forEach((ball, index) => {
-    const frontZ = ballRadius * 1.3 + Math.sin(seconds * 1.3 + index) * 15
-    ball.z = Math.min(-500 + Math.max(burstSeconds, 0) * 70 - index * 80, frontZ)
-    if (ball.z < ballRadius) return
-    const pulls = [[(home.x - ball.x) * 0.0004, (home.y - ball.y) * 0.0004], [(ball.y - home.y) * 0.0003, (home.x - ball.x) * 0.0003]]
-    for (const other of balls) if (other !== ball) pulls.push(gravityPull(ball, other, ballGravity, ballRadius * 2.2))
-    if (pointer.isDown) pulls.push(gravityPull(ball, pointer, ballGravity * 4, 0))
+    const homeX = viewWidth / 2 + tilt.x + Math.sin(seconds * 0.15 + index * 1.3) * viewWidth * 0.2
+    const homeY = viewHeight / 2 + tilt.y + Math.cos(seconds * 0.11 + index * 2.1) * viewHeight * 0.15
+    const pulls = [[(homeX - ball.x) * 0.0004, (homeY - ball.y) * 0.0004]]
+    for (const other of balls) if (other !== ball) pulls.push(gravityPull(ball, other, ballGravity, ballRadius * 1.6))
+    if (pointer.isDown) pulls.push(gravityPull(ball, pointer, ballGravity * 3, 0))
     for (const [pullX, pullY] of pulls) {
       ball.velocityX += pullX
       ball.velocityY += pullY
     }
-    ball.velocityX *= 0.985
-    ball.velocityY *= 0.985
+    ball.velocityX *= 0.95
+    ball.velocityY *= 0.95
+    ball.z = ballDepth + Math.sin(seconds * 0.2 + index) * 30
     ball.x += ball.velocityX
     ball.y += ball.velocityY
   })
@@ -216,11 +215,6 @@ async function startRip() {
   scene.fog = new THREE.Fog('#ffc49a', cameraDistance + 800, cameraDistance + 7000)
   const sky = sunsetSky(THREE, 8000)
   sky.position.copy(camera.position)
-  const sunForReflections = new THREE.Mesh(new THREE.SphereGeometry(5), new THREE.MeshBasicMaterial({ color: '#fff4d6' }))
-  sunForReflections.position.set(15, 4, -40)
-  const skyForReflections = new THREE.Scene().add(sunsetSky(THREE, 50), sunForReflections)
-  scene.environment = new THREE.PMREMGenerator(renderer).fromScene(skyForReflections).texture
-
   const keyLight = new THREE.DirectionalLight('#ffe6cc', 2.45)
   keyLight.position.set(width * 0.1, height * 1.2, cameraDistance)
   keyLight.target.position.set(width / 2, height / 2, 0)
@@ -270,6 +264,27 @@ async function startRip() {
   holeTexture = new THREE.CanvasTexture(maskCanvas)
   for (const pageTexture of [texture, holeTexture]) pageTexture.repeat.y = height / pageHeight
 
+  const reflectedPage = new THREE.CanvasTexture(snapshot)
+  reflectedPage.colorSpace = THREE.SRGBColorSpace
+  reflectedPage.repeat.y = height / pageHeight
+  reflectedPage.offset.y = 1 - (scrollY + height) / pageHeight
+  const pageForReflections = new THREE.Mesh(new THREE.PlaneGeometry(80, 80 * height / width), new THREE.MeshBasicMaterial({ map: reflectedPage }))
+  pageForReflections.position.z = 30
+  pageForReflections.rotation.y = Math.PI
+  const sunForReflections = new THREE.Mesh(new THREE.SphereGeometry(5), new THREE.MeshBasicMaterial({ color: '#fff4d6' }))
+  sunForReflections.position.set(15, 4, -40)
+  const reflectedWorld = new THREE.Scene().add(sunsetSky(THREE, 50), sunForReflections, pageForReflections)
+  scene.environment = new THREE.PMREMGenerator(renderer).fromScene(reflectedWorld).texture
+
+  const moteCount = 300
+  const motePositions = new Float32Array(moteCount * 3)
+  for (let mote = 0; mote < moteCount; mote++) {
+    motePositions.set([width / 2 + (Math.random() - 0.5) * 4000, (Math.random() * 2.3 - 0.3) * height, -300 - Math.random() * 3000], mote * 3)
+  }
+  const moteGeometry = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(motePositions, 3))
+  const moteMaterial = new THREE.PointsMaterial({ map: puffTexture, color: '#fff2d9', size: 40, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false })
+  scene.add(new THREE.Points(moteGeometry, moteMaterial))
+
   rows = Math.round(columns * height / width)
   rowSpacing = height / (rows - 1)
   const geometry = new THREE.PlaneGeometry(width, height, columns - 1, rows - 1).translate(width / 2, height / 2, 0)
@@ -296,7 +311,7 @@ async function startRip() {
     if (row < rows - 2) linkParticles(i, i + columns * 2)
   }
 
-  const chrome = new THREE.MeshPhysicalMaterial({ color: '#ffffff', metalness: 1, roughness: 0.08, clearcoat: 1, iridescence: 0.4 })
+  const chrome = new THREE.MeshPhysicalMaterial({ color: '#fff4f8', metalness: 1, roughness: 0.1, clearcoat: 1, iridescence: 0.2 })
   const metaballs = new MarchingCubes(isTouchDevice ? 32 : 64, chrome, false, false, 200000)
   metaballs.isolation = ballIsolation
   metaballs.position.set(width / 2, height / 2, -100)
@@ -306,24 +321,29 @@ async function startRip() {
   const toBox = (value, center) => (value - center) / metaballs.scale.x / 2 + 0.5
   ballRadius = Math.sqrt(ballStrength / (ballSubtract + ballIsolation)) * 2 * metaballs.scale.x * 1.2
   balls = Array.from({ length: 5 }, (_, index) => {
-    const angle = index * Math.PI * 2 / 5, ringRadius = Math.min(width, height) * 0.25
-    return { x: width / 2 + Math.cos(angle) * ringRadius, y: height / 2 + Math.sin(angle) * ringRadius, z: -500, velocityX: -Math.sin(angle) * 2, velocityY: Math.cos(angle) * 2 }
+    const angle = index * Math.PI * 2 / 5, ringRadius = Math.min(width, height) * 0.2
+    return { x: width / 2 + Math.cos(angle) * ringRadius, y: height / 2 + Math.sin(angle) * ringRadius, z: ballDepth, velocityX: 0, velocityY: 0 }
   })
 
   renderer.setAnimationLoop(time => {
-    const seconds = time / 1000, burstSeconds = seconds - burstAfterSeconds
+    const seconds = time / 1000, tearSeconds = seconds - burstAfterSeconds - 3
     followScroll()
     clothMesh.position.y = scrollRemainder
     for (const pageTexture of [texture, holeTexture]) pageTexture.offset.y = 1 - (scrolledRows * rowSpacing + height) / pageHeight
-    for (const puff of cloudPuffs) puff.position.x = (puff.position.x + 7000 + 0.3) % 14000 - 7000
+    for (const puff of cloudPuffs) puff.position.x = (puff.position.x + 7000 + 0.15) % 14000 - 7000
+    for (let mote = 0; mote < moteCount; mote++) {
+      motePositions[mote * 3] += Math.sin(seconds * 0.3 + mote) * 0.2
+      motePositions[mote * 3 + 1] += 0.2 + (mote % 5) * 0.06
+      if (motePositions[mote * 3 + 1] > height * 2) motePositions[mote * 3 + 1] = -height * 0.3
+    }
+    moteGeometry.attributes.position.needsUpdate = true
+    if (tearSeconds > 0 && tearSeconds < 6) cutCloth(width / 2, height / 2, tearSeconds * Math.min(width, height) * 0.06, 0)
 
-    moveBalls(seconds, burstSeconds)
+    moveBalls(seconds)
     metaballs.reset()
-    balls.forEach((ball, index) => {
+    for (const ball of balls) {
       metaballs.addBall(toBox(ball.x, metaballs.position.x), toBox(ball.y, metaballs.position.y), toBox(ball.z, metaballs.position.z), ballStrength, ballSubtract)
-      const pushedThrough = ball.z + ballRadius * punctureDepth
-      if (pushedThrough > 0 && ball.z < ballRadius) cutCloth(ball.x, ball.y, Math.min(pushedThrough * 2, ballRadius), index)
-    })
+    }
     metaballs.update()
 
     simulateCloth(seconds)
