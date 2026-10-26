@@ -11,7 +11,7 @@ const tilt = { x: 0, y: 0 }
 let linkStart, linkEnd, linkRestLength, linkCount = 0
 let dragStart = null, lastCut = null, ripStarted = false, askedForGyro = false
 let viewWidth, viewHeight, rowSpacing, rows, positions, previousPositions, isPinned, isPunctured
-let holeMask, holeTexture, balls, ballRadius, pageLinks = [], scrolledRows = 0, scrollRemainder = 0
+let holeMask, holeTexture, balls, ballRadius, pagePointAt, pageLinks = [], scrolledRows = 0, scrollRemainder = 0
 
 function updatePointer(event) {
   pointer.x = event.clientX
@@ -279,6 +279,16 @@ async function startRip() {
   const clothMesh = new THREE.Mesh(geometry, clothMaterial)
   clothMesh.castShadow = clothMesh.receiveShadow = true
   scene.add(clothMesh)
+  const raycaster = new THREE.Raycaster()
+  pagePointAt = (clientX, clientY) => {
+    geometry.computeBoundingSphere()
+    raycaster.setFromCamera(new THREE.Vector2(clientX / width * 2 - 1, 1 - clientY / height * 2), camera)
+    const hit = raycaster.intersectObject(clothMesh)[0]
+    if (!hit) return null
+    const pageX = hit.uv.x * width, pageY = scrolledRows * rowSpacing + (1 - hit.uv.y) * height
+    const isHole = holeMask.getImageData(pageX * maskScale, pageY * maskScale, 1, 1).data[0] < 128
+    return isHole ? null : { x: pageX, y: pageY }
+  }
 
   positions = geometry.attributes.position.array
   previousPositions = positions.slice()
@@ -399,15 +409,16 @@ addEventListener('pointerdown', event => {
 
 addEventListener('pointermove', event => {
   updatePointer(event)
-  if (lastCut && holeMask) return cutAlongDrag()
-  const draggedFar = dragStart && Math.hypot(pointer.x - dragStart.x, pointer.y - dragStart.y) > 30
-  if (!ripStarted && event.pointerType === 'mouse' && draggedFar) startRip()
+  const dragDistance = dragStart ? Math.hypot(pointer.x - dragStart.x, pointer.y - dragStart.y) : 0
+  if (lastCut && holeMask) return dragDistance > 8 && cutAlongDrag()
+  if (!ripStarted && event.pointerType === 'mouse' && dragDistance > 30) startRip()
 })
 
 addEventListener('pointerup', event => {
   updatePointer(event)
   const isTap = dragStart && Math.hypot(pointer.x - dragStart.x, pointer.y - dragStart.y) < 8
-  if (holeMask && isTap) openLinkAt(event.clientX + scrollX, event.clientY + scrollY)
+  const pagePoint = holeMask && isTap && pagePointAt(event.clientX, event.clientY)
+  if (pagePoint) openLinkAt(pagePoint.x, pagePoint.y)
   releasePointer()
 })
 
