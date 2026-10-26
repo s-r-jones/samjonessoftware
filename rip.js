@@ -1,5 +1,6 @@
-const columns = 60, rows = 40
+const columns = 100, rows = 66
 const relaxIterations = 12, gravity = 0.2, damping = 0.99, tearRatio = 2.5
+const ballStrength = 0.8, ballSubtract = 12, burstAfterSeconds = 30
 const pointer = { x: 0, y: 0, isDown: false }
 const constraints = [], rightLinks = [], downLinks = []
 let dragStart = null, ripStarted = false
@@ -72,19 +73,36 @@ function visibleQuadIndices() {
 }
 
 function moveMetaballs(metaballs, seconds) {
+  const ballPoints = []
   metaballs.reset()
   for (let ball = 0; ball < 7; ball++) {
     const angle = seconds * (0.4 + ball * 0.07) + ball * 0.9
-    metaballs.addBall(0.5 + 0.3 * Math.cos(angle), 0.5 + 0.3 * Math.sin(angle * 1.3), 0.5 + 0.3 * Math.sin(angle * 0.7), 0.8, 12)
+    const point = [0.5 + 0.3 * Math.cos(angle), 0.5 + 0.3 * Math.sin(angle * 1.3), 0.5 + 0.3 * Math.sin(angle * 0.7)]
+    metaballs.addBall(...point, ballStrength, ballSubtract)
+    ballPoints.push(point)
   }
   metaballs.rotation.y = seconds * 0.2
   metaballs.update()
+  return ballPoints
+}
+
+function pushClothAwayFrom(ballCenter, ballRadius) {
+  const holeRadius = Math.sqrt(Math.max(0, ballRadius ** 2 - ballCenter.z ** 2))
+  for (let i = 0; i < columns * rows; i++) {
+    if (isPinned[i]) continue
+    const deltaX = positions[i * 3] - ballCenter.x, deltaY = positions[i * 3 + 1] - ballCenter.y
+    const distance = Math.hypot(deltaX, deltaY)
+    if (distance === 0 || distance >= holeRadius) continue
+    positions[i * 3] = ballCenter.x + deltaX / distance * holeRadius
+    positions[i * 3 + 1] = ballCenter.y + deltaY / distance * holeRadius
+  }
 }
 
 async function startRip() {
   ripStarted = true
-  const [THREE, { MarchingCubes }, { default: html2canvas }] = await Promise.all([
-    import('three'), import('three/addons/objects/MarchingCubes.js'), import('html2canvas')
+  const [THREE, { MarchingCubes }, { RoomEnvironment }, { default: html2canvas }] = await Promise.all([
+    import('three'), import('three/addons/objects/MarchingCubes.js'),
+    import('three/addons/environments/RoomEnvironment.js'), import('html2canvas')
   ])
   const pixelRatio = Math.min(devicePixelRatio, 2)
   // Safari never loads lazy images inside html2canvas's offscreen clone, so the snapshot hangs forever
@@ -100,7 +118,13 @@ async function startRip() {
   document.body.style.visibility = 'hidden'
 
   const scene = new THREE.Scene()
-  scene.background = new THREE.Color('#2a0a3d')
+  scene.background = new THREE.Color('#14051f')
+  scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment()).texture
+  const pinkLight = new THREE.DirectionalLight('#ff3fd2', 3)
+  pinkLight.position.set(-1, 1, 1)
+  const cyanLight = new THREE.DirectionalLight('#3ff5ff', 2)
+  cyanLight.position.set(1, -0.5, 1)
+  scene.add(pinkLight, cyanLight)
   const camera = new THREE.OrthographicCamera(0, width, height, 0, -5000, 5000)
   const texture = new THREE.CanvasTexture(snapshot)
   texture.colorSpace = THREE.SRGBColorSpace
@@ -118,19 +142,28 @@ async function startRip() {
   if (pointer.isDown) grabNearestParticle()
 
   const resolution = matchMedia('(pointer: coarse)').matches ? 28 : 48
-  const metaballs = new MarchingCubes(resolution, new THREE.MeshNormalMaterial(), false, false, 100000)
+  const chrome = new THREE.MeshPhysicalMaterial({ color: '#b48cff', metalness: 0.6, roughness: 0.15, clearcoat: 1, iridescence: 1 })
+  const metaballs = new MarchingCubes(resolution, chrome, false, false, 100000)
   metaballs.position.set(width / 2, height / 2, -2000)
-  metaballs.scale.setScalar(Math.max(width, height))
+  metaballs.scale.setScalar(Math.max(width, height) / 2)
   scene.add(metaballs)
+  const ballRadius = Math.sqrt(ballStrength / ballSubtract) * 2 * metaballs.scale.x
 
   renderer.setAnimationLoop(time => {
+    const ballPoints = moveMetaballs(metaballs, time / 1000)
+    const burstSeconds = time / 1000 - burstAfterSeconds
+    if (burstSeconds > 0) {
+      metaballs.position.z = Math.min(-2000 + burstSeconds * 200, 0)
+      for (const [x, y, z] of ballPoints) {
+        pushClothAwayFrom(new THREE.Vector3(x * 2 - 1, y * 2 - 1, z * 2 - 1).applyMatrix4(metaballs.matrixWorld), ballRadius)
+      }
+    }
     simulateCloth()
     const quadIndices = visibleQuadIndices()
     geometry.index.array.set(quadIndices)
     geometry.index.needsUpdate = true
     geometry.setDrawRange(0, quadIndices.length)
     geometry.attributes.position.needsUpdate = true
-    moveMetaballs(metaballs, time / 1000)
     renderer.render(scene, camera)
   })
 }
@@ -150,5 +183,6 @@ addEventListener('pointermove', event => {
   if (!ripStarted && event.pointerType === 'mouse' && draggedFar) startRip()
 })
 
+setTimeout(() => ripStarted || startRip(), burstAfterSeconds * 1000)
 addEventListener('pointerup', releaseParticle)
 addEventListener('pointercancel', releaseParticle)
