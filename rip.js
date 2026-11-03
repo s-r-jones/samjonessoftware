@@ -4,7 +4,7 @@ const setting = (name, fallback) => Number(urlSettings.get(name) ?? fallback)
 const columns = setting('columns', isTouchDevice ? 80 : 160)
 const relaxIterations = setting('iterations', 4), burstAfterSeconds = setting('burst', 8)
 const flowerCount = setting('flowers', isTouchDevice ? 220 : 500), windStrength = setting('wind', 0.15)
-const gravity = 0.04, damping = 0.98, knifeRadius = 18, slashRadius = 30, maskScale = 0.5, holdToCutMilliseconds = 100
+const gravity = 0.04, damping = 0.98, knifeRadius = 16, slashRadius = 25, maskScale = 0.5, holdToCutMilliseconds = 100
 const pointer = { x: 0, y: 0, isDown: false }
 const tilt = { x: 0, y: 0 }
 let linkStart, linkEnd, linkRestLength, linkCount = 0
