@@ -146,7 +146,7 @@ async function startRip() {
   const [THREE, { default: html2canvas }, { createFlowerField }] = await Promise.all([import('three'), import('html2canvas'), import('./flowers.js')])
   // Safari never loads lazy images inside html2canvas's offscreen clone, so the snapshot hangs forever
   document.querySelectorAll('img').forEach(image => image.loading = 'eager')
-  document.querySelectorAll('video').forEach(video => video.outerHTML = `<img src="${video.poster}" width="${video.width}">`)
+  document.querySelectorAll('video').forEach(video => video.outerHTML = `<img src="${video.poster}" width="${video.width}" height="${video.height}">`)
   const width = viewWidth = document.documentElement.clientWidth, height = viewHeight = innerHeight
   const pageHeight = document.documentElement.scrollHeight
   const renderer = new THREE.WebGLRenderer({ antialias: true })
